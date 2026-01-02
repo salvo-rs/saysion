@@ -1,4 +1,4 @@
-use crate::{async_trait, Result, Session};
+use crate::{Result, Session, async_trait};
 
 /// An async session backend.
 #[async_trait]

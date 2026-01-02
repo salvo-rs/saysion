@@ -1,6 +1,8 @@
-use crate::{async_trait, log, Result, Session, SessionStore};
-use async_lock::RwLock;
 use std::{collections::HashMap, sync::Arc};
+
+use async_lock::RwLock;
+
+use crate::{Result, Session, SessionStore, async_trait};
 
 /// # in-memory session store
 /// Because there is no external
@@ -35,7 +37,7 @@ pub struct MemoryStore {
 impl SessionStore for MemoryStore {
     async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
         let id = Session::id_from_cookie_value(&cookie_value)?;
-        log::trace!("loading session by id `{}`", id);
+        tracing::debug!("loading session by id `{}`", id);
         Ok(self
             .inner
             .read()
@@ -46,7 +48,7 @@ impl SessionStore for MemoryStore {
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
-        log::trace!("storing session by id `{}`", session.id());
+        tracing::debug!("storing session by id `{}`", session.id());
         self.inner
             .write()
             .await
@@ -57,13 +59,13 @@ impl SessionStore for MemoryStore {
     }
 
     async fn destroy_session(&self, session: Session) -> Result {
-        log::trace!("destroying session by id `{}`", session.id());
+        tracing::debug!("destroying session by id `{}`", session.id());
         self.inner.write().await.remove(session.id());
         Ok(())
     }
 
     async fn clear_store(&self) -> Result {
-        log::trace!("clearing memory store");
+        tracing::debug!("clearing memory store");
         self.inner.write().await.clear();
         Ok(())
     }
@@ -79,7 +81,7 @@ impl MemoryStore {
     /// intermittent basis if this store is run for long enough that
     /// memory accumulation is a concern
     pub async fn cleanup(&self) -> Result {
-        log::trace!("cleaning up memory store...");
+        tracing::debug!("cleaning up memory store...");
         let ids_to_delete: Vec<_> = self
             .inner
             .read()
@@ -94,7 +96,7 @@ impl MemoryStore {
             })
             .collect();
 
-        log::trace!("found {} expired sessions", ids_to_delete.len());
+        tracing::debug!("found {} expired sessions", ids_to_delete.len());
         for id in ids_to_delete {
             self.inner.write().await.remove(&id);
         }
@@ -104,13 +106,14 @@ impl MemoryStore {
     /// returns the number of elements in the memory store
     /// # Example
     /// ```rust
-    /// # use async_session::{MemoryStore, Session, SessionStore};
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::{MemoryStore, Session, SessionStore};
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut store = MemoryStore::new();
     /// assert_eq!(store.count().await, 0);
     /// store.store_session(Session::new()).await?;
     /// assert_eq!(store.count().await, 1);
-    /// # Ok(()) }) }
+    /// # Ok(()) }
     /// ```
     pub async fn count(&self) -> usize {
         let data = self.inner.read().await;
@@ -121,9 +124,9 @@ impl MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_std::task;
     use std::time::Duration;
-    #[async_std::test]
+
+    #[tokio::test]
     async fn creating_a_new_session_with_no_expiry() -> Result {
         let store = MemoryStore::new();
         let mut session = Session::new();
@@ -138,7 +141,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn updating_a_session() -> Result {
         let store = MemoryStore::new();
         let mut session = Session::new();
@@ -156,7 +159,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn updating_a_session_extending_expiry() -> Result {
         let store = MemoryStore::new();
         let mut session = Session::new();
@@ -174,13 +177,13 @@ mod tests {
         let session = store.load_session(cookie_value.clone()).await?.unwrap();
         assert_eq!(session.expiry().unwrap(), &new_expires);
 
-        task::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         assert_eq!(None, store.load_session(cookie_value).await?);
 
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn creating_a_new_session_with_expiry() -> Result {
         let store = MemoryStore::new();
         let mut session = Session::new();
@@ -196,13 +199,13 @@ mod tests {
 
         assert!(!loaded_session.is_expired());
 
-        task::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         assert_eq!(None, store.load_session(cookie_value).await?);
 
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn destroying_a_single_session() -> Result {
         let store = MemoryStore::new();
         for _ in 0..3i8 {
@@ -221,7 +224,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn clearing_the_whole_store() -> Result {
         let store = MemoryStore::new();
         for _ in 0..3i8 {

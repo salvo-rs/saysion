@@ -1,60 +1,30 @@
-<h1 align="center">async-session</h1>
+<h1 align="center">saysion</h1>
 <div align="center">
   <strong>
-    Async session support with pluggable middleware
+    Session support with pluggable middleware
   </strong>
 </div>
 
 <br />
 
 <div align="center">
-  <!-- Crates version -->
-  <a href="https://crates.io/crates/async-session">
-    <img src="https://img.shields.io/crates/v/async-session.svg?style=flat-square"
-    alt="Crates.io version" />
-  </a>
-  <!-- Downloads -->
-  <a href="https://crates.io/crates/async-session">
-    <img src="https://img.shields.io/crates/d/async-session.svg?style=flat-square"
-      alt="Download" />
-  </a>
-  <!-- docs.rs docs -->
-  <a href="https://docs.rs/async-session">
-    <img src="https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square"
-      alt="docs.rs docs" />
-  </a>
-</div>
-
-<div align="center">
   <h3>
-    <a href="https://docs.rs/async-session">
+    <a href="https://docs.rs/saysion">
       API Docs
     </a>
     <span> | </span>
-    <a href="https://github.com/http-rs/async-session/releases">
+    <a href="https://github.com/salvo-rs/saysion/releases">
       Releases
     </a>
     <span> | </span>
-    <a href="https://github.com/http-rs/async-session/blob/main/.github/CONTRIBUTING.md">
+    <a href="https://github.com/salvo-rs/saysion/blob/main/.github/CONTRIBUTING.md">
       Contributing
     </a>
   </h3>
 </div>
 
-## Available session stores
 
-* [async-sqlx-session](https://crates.io/crates/async-sqlx-session) postgres, mysql & sqlite
-* [async-redis-session](https://crates.io/crates/async-redis-session)
-* [async-mongodb-session](https://crates.io/crates/async-mongodb-session)
-* [async-session-r2d2](https://crates.io/crates/async-session-r2d2) - sqlite only
-
-## Framework implementations
-
-* [`tide::sessions`](https://docs.rs/tide/latest/tide/sessions/index.html)
-* [warp-sessions](https://docs.rs/warp-sessions/latest/warp_sessions/)
-* [trillium-sessions](https://docs.trillium.rs/trillium_sessions)
-* [axum-sessions](https://docs.rs/axum_sessions)
-* [salvo-sessions](https://docs.rs/salvo_extra/latest/salvo_extra/session/index.html)
+*Fork from: https://github.com/http-rs/async-session*
 
 ## Safety
 This crate uses ``#![deny(unsafe_code)]`` to ensure everything is implemented in
@@ -63,13 +33,6 @@ This crate uses ``#![deny(unsafe_code)]`` to ensure everything is implemented in
 ## Contributing
 Want to join us? Check out our ["Contributing" guide][contributing] and take a
 look at some of these issues:
-
-- [Issues labeled "good first issue"][good-first-issue]
-- [Issues labeled "help wanted"][help-wanted]
-
-[contributing]: https://github.com/http-rs/async-session/blob/main/.github/CONTRIBUTING.md
-[good-first-issue]: https://github.com/http-rs/async-session/labels/good%20first%20issue
-[help-wanted]: https://github.com/http-rs/async-session/labels/help%20wanted
 
 ## Acknowledgements
 

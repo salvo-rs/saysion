@@ -1,13 +1,15 @@
-use rand::RngCore;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     convert::TryFrom,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
     },
 };
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime as DateTime;
 
 /// # The main session type.
@@ -27,8 +29,9 @@ use time::OffsetDateTime as DateTime;
 ///
 /// ### Change tracking example
 /// ```rust
-/// # use async_session::Session;
-/// # fn main() -> async_session::Result { async_std::task::block_on(async {
+/// # use saysion::Session;
+/// # #[tokio::main]
+/// # async fn main() -> saysion::Result {
 /// let mut session = Session::new();
 /// assert!(!session.data_changed());
 ///
@@ -52,9 +55,9 @@ use time::OffsetDateTime as DateTime;
 /// assert!(!session.data_changed());
 /// session.remove("key");
 /// assert!(session.data_changed());
-/// # Ok(()) }) }
+/// # Ok(()) }
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Session {
     id: String,
     expiry: Option<DateTime>,
@@ -90,8 +93,8 @@ impl Default for Session {
 /// generates a random cookie value
 fn generate_cookie(len: usize) -> String {
     let mut key = vec![0u8; len];
-    rand::thread_rng().fill_bytes(&mut key);
-    base64::encode(key)
+    rand::rng().fill_bytes(&mut key);
+    BASE64_STANDARD.encode(key)
 }
 
 impl Session {
@@ -101,12 +104,15 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let session = Session::new();
     /// assert_eq!(None, session.expiry());
     /// assert!(session.into_cookie_value().is_some());
-    /// # Ok(()) }) }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new() -> Self {
         let cookie_value = generate_cookie(64);
         let id = Session::id_from_cookie_value(&cookie_value).unwrap();
@@ -129,18 +135,20 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let session = Session::new();
     /// let id = session.id().to_string();
     /// let cookie_value = session.into_cookie_value().unwrap();
     /// assert_eq!(id, Session::id_from_cookie_value(&cookie_value)?);
-    /// # Ok(()) }) }
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn id_from_cookie_value(string: &str) -> Result<String, base64::DecodeError> {
-        let decoded = base64::decode(string)?;
+        let decoded = BASE64_STANDARD.decode(string)?;
         let hash = blake3::hash(&decoded);
-        Ok(base64::encode(hash.as_bytes()))
+        Ok(BASE64_STANDARD.encode(hash.as_bytes()))
     }
 
     /// mark this session for destruction. the actual session record
@@ -149,13 +157,15 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// assert!(!session.is_destroyed());
     /// session.destroy();
     /// assert!(session.is_destroyed());
-    /// # Ok(()) }) }
+    /// # Ok(()) }
+    /// ```
     pub fn destroy(&mut self) {
         self.destroy.store(true, Ordering::SeqCst);
     }
@@ -165,14 +175,15 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// assert!(!session.is_destroyed());
     /// session.destroy();
     /// assert!(session.is_destroyed());
-    /// # Ok(()) }) }
-
+    /// # Ok(()) }
+    /// ```
     pub fn is_destroyed(&self) -> bool {
         self.destroy.load(Ordering::SeqCst)
     }
@@ -182,13 +193,15 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let session = Session::new();
     /// let id = session.id().to_owned();
     /// let cookie_value = session.into_cookie_value().unwrap();
     /// assert_eq!(id, Session::id_from_cookie_value(&cookie_value)?);
-    /// # Ok(()) }) }
+    /// # Ok(()) }
+    /// ```
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -200,15 +213,17 @@ impl Session {
     ///
     /// ```rust
     /// # use serde::{Serialize, Deserialize};
-    /// # use async_session::Session;
+    /// # use saysion::Session;
     /// #[derive(Serialize, Deserialize)]
     /// struct User {
     ///     name: String,
     ///     legs: u8
     /// }
+    /// # fn main() {
     /// let mut session = Session::new();
     /// session.insert("user", User { name: "chashu".into(), legs: 4 }).expect("serializable");
     /// assert_eq!(r#"{"name":"chashu","legs":4}"#, session.get_raw("user").unwrap());
+    /// # }
     /// ```
     pub fn insert(&mut self, key: &str, value: impl Serialize) -> Result<(), serde_json::Error> {
         self.insert_raw(key, serde_json::to_string(&value)?);
@@ -220,11 +235,13 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
+    /// # use saysion::Session;
+    /// # fn main() {
     /// let mut session = Session::new();
     /// session.insert_raw("ten", "10".to_string());
     /// let ten: usize = session.get("ten").unwrap();
     /// assert_eq!(ten, 10);
+    /// # }
     /// ```
     pub fn insert_raw(&mut self, key: &str, value: String) {
         let mut data = self.data.write().unwrap();
@@ -239,11 +256,14 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
+    /// # use saysion::Session;
+    /// # fn main() -> saysion::Result {
     /// let mut session = Session::new();
-    /// session.insert("key", vec![1, 2, 3]);
+    /// session.insert("key", vec![1, 2, 3])?;
     /// let numbers: Vec<usize> = session.get("key").unwrap();
     /// assert_eq!(vec![1, 2, 3], numbers);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
         let data = self.data.read().unwrap();
@@ -256,10 +276,13 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
+    /// # use saysion::Session;
+    /// # fn main() -> saysion::Result {
     /// let mut session = Session::new();
-    /// session.insert("key", vec![1, 2, 3]);
+    /// session.insert("key", vec![1, 2, 3])?;
     /// assert_eq!("[1,2,3]", session.get_raw("key").unwrap());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn get_raw(&self, key: &str) -> Option<String> {
         let data = self.data.read().unwrap();
@@ -271,12 +294,15 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
+    /// # use saysion::Session;
+    /// # fn main() -> saysion::Result {
     /// let mut session = Session::new();
-    /// session.insert("key", "value");
+    /// session.insert("key", "value")?;
     /// session.remove("key");
     /// assert!(session.get_raw("key").is_none());
     /// assert_eq!(session.len(), 0);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn remove(&mut self, key: &str) {
         let mut data = self.data.write().unwrap();
@@ -290,11 +316,14 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
+    /// # use saysion::Session;
+    /// # fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// assert_eq!(session.len(), 0);
-    /// session.insert("key", 0);
+    /// session.insert("key", 0)?;
     /// assert_eq!(session.len(), 1);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn len(&self) -> usize {
         self.data.read().unwrap().len()
@@ -305,11 +334,15 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
+    /// # use saysion::Session;
+    /// # fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// assert!(session.is_empty());
-    /// session.insert("key", 0);
+    /// session.insert("key", 0)?;
     /// assert!(!session.is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn is_empty(&self) -> bool {
         return self.data.read().unwrap().is_empty();
     }
@@ -319,8 +352,9 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// let old_id = session.id().to_string();
     /// session.regenerate();
@@ -328,7 +362,8 @@ impl Session {
     /// let new_id = session.id().to_string();
     /// let cookie_value = session.into_cookie_value().unwrap();
     /// assert_eq!(new_id, Session::id_from_cookie_value(&cookie_value)?);
-    /// # Ok(()) }) }
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn regenerate(&mut self) {
         let cookie_value = generate_cookie(64);
@@ -344,13 +379,14 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// session.set_cookie_value("hello".to_owned());
     /// let cookie_value = session.into_cookie_value().unwrap();
     /// assert_eq!(cookie_value, "hello".to_owned());
-    /// # Ok(()) }) }
+    /// # Ok(()) }
     /// ```
     pub fn set_cookie_value(&mut self, cookie_value: String) {
         self.cookie_value = Some(cookie_value)
@@ -361,13 +397,14 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// assert_eq!(None, session.expiry());
     /// session.expire_in(std::time::Duration::from_secs(1));
     /// assert!(session.expiry().is_some());
-    /// # Ok(()) }) }
+    /// # Ok(()) }
     /// ```
     pub fn expiry(&self) -> Option<&DateTime> {
         self.expiry.as_ref()
@@ -378,13 +415,14 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// assert_eq!(None, session.expiry());
     /// session.set_expiry(time::OffsetDateTime::now_utc());
     /// assert!(session.expiry().is_some());
-    /// # Ok(()) }) }
+    /// # Ok(()) }
     /// ```
     pub fn set_expiry(&mut self, expiry: DateTime) {
         self.expiry = Some(expiry);
@@ -395,13 +433,14 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// assert_eq!(None, session.expiry());
     /// session.expire_in(std::time::Duration::from_secs(1));
     /// assert!(session.expiry().is_some());
-    /// # Ok(()) }) }
+    /// # Ok(()) }
     /// ```
     pub fn expire_in(&mut self, ttl: std::time::Duration) {
         self.expiry = Some(DateTime::now_utc() + ttl);
@@ -414,18 +453,19 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
+    /// # use saysion::Session;
     /// # use std::time::Duration;
-    /// # use async_std::task;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// assert_eq!(None, session.expiry());
     /// assert!(!session.is_expired());
     /// session.expire_in(Duration::from_secs(1));
     /// assert!(!session.is_expired());
-    /// task::sleep(Duration::from_secs(2)).await;
+    /// tokio::time::sleep(Duration::from_secs(2)).await;
     /// assert!(session.is_expired());
-    /// # Ok(()) }) }
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn is_expired(&self) -> bool {
         match self.expiry {
@@ -439,24 +479,21 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
+    /// # use saysion::Session;
     /// # use std::time::Duration;
-    /// # use async_std::task;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let session = Session::new();
     /// let mut session = session.validate().unwrap();
     /// session.expire_in(Duration::from_secs(1));
     /// let session = session.validate().unwrap();
-    /// task::sleep(Duration::from_secs(2)).await;
+    /// tokio::time::sleep(Duration::from_secs(2)).await;
     /// assert_eq!(None, session.validate());
-    /// # Ok(()) }) }
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn validate(self) -> Option<Self> {
-        if self.is_expired() {
-            None
-        } else {
-            Some(self)
-        }
+        if self.is_expired() { None } else { Some(self) }
     }
 
     /// Checks if the data has been modified. This is based on the
@@ -465,18 +502,19 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// assert!(!session.data_changed(), "new session is not changed");
-    /// session.insert("key", 1);
+    /// session.insert("key", 1)?;
     /// assert!(session.data_changed());
     ///
     /// session.reset_data_changed();
     /// assert!(!session.data_changed());
     /// session.remove("key");
     /// assert!(session.data_changed());
-    /// # Ok(()) }) }
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn data_changed(&self) -> bool {
         self.data_changed.load(Ordering::Acquire)
@@ -489,39 +527,40 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// assert!(!session.data_changed(), "new session is not changed");
-    /// session.insert("key", 1);
+    /// session.insert("key", 1)?;
     /// assert!(session.data_changed());
     ///
     /// session.reset_data_changed();
     /// assert!(!session.data_changed());
     /// session.remove("key");
     /// assert!(session.data_changed());
-    /// # Ok(()) }) }
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn reset_data_changed(&self) {
         self.data_changed.store(false, Ordering::SeqCst);
     }
 
-    /// Ensures that this session is not expired. Returns None if it is expired
+    /// Duration from now to the expiry time of this session
     ///
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
+    /// # use saysion::Session;
     /// # use std::time::Duration;
-    /// # use async_std::task;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// session.expire_in(Duration::from_secs(123));
     /// let expires_in = session.expires_in().unwrap();
     /// assert!(123 - expires_in.as_secs() < 2);
-    /// # Ok(()) }) }
+    /// # Ok(())
+    /// # }
     /// ```
-    /// Duration from now to the expiry time of this session
     pub fn expires_in(&self) -> Option<std::time::Duration> {
         let dur = self.expiry? - DateTime::now_utc();
         if dur.is_negative() {
@@ -537,13 +576,14 @@ impl Session {
     /// # Example
     ///
     /// ```rust
-    /// # use async_session::Session;
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::Session;
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut session = Session::new();
     /// session.set_cookie_value("hello".to_owned());
     /// let cookie_value = session.into_cookie_value().unwrap();
     /// assert_eq!(cookie_value, "hello".to_owned());
-    /// # Ok(()) }) }
+    /// # Ok(()) }
     /// ```
     pub fn into_cookie_value(mut self) -> Option<String> {
         self.cookie_value.take()

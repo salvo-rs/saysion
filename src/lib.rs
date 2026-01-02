@@ -8,10 +8,10 @@
 //! # Example
 //!
 //! ```
-//! use async_session::{Session, SessionStore, MemoryStore};
+//! use saysion::{Session, SessionStore, MemoryStore};
 //!
-//! # fn main() -> async_session::Result {
-//! # async_std::task::block_on(async {
+//! # #[tokio::main]
+//! # async fn main() -> saysion::Result {
 //! #
 //! // Init a new session store we can persist sessions to.
 //! let mut store = MemoryStore::new();
@@ -29,7 +29,7 @@
 //! assert_eq!(session.get::<usize>("user_id").unwrap(), 1);
 //! assert!(!session.data_changed());
 //! #
-//! # Ok(()) }) }
+//! # Ok(()) }
 //! ```
 
 // #![forbid(unsafe_code, future_incompatible)]
@@ -47,6 +47,7 @@
 )]
 
 pub use anyhow::Error;
+pub use async_trait::async_trait;
 /// An anyhow::Result with default return type of ()
 pub type Result<T = ()> = std::result::Result<T, Error>;
 
@@ -59,13 +60,3 @@ pub use cookie_store::CookieStore;
 pub use memory_store::MemoryStore;
 pub use session::Session;
 pub use session_store::SessionStore;
-
-pub use async_trait::async_trait;
-pub use base64;
-pub use blake3;
-pub use hmac;
-pub use log;
-pub use serde;
-pub use serde_json;
-pub use sha2;
-pub use time;

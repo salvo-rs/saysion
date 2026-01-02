@@ -1,4 +1,5 @@
-use crate::{async_trait, Result, Session, SessionStore};
+use crate::{Result, Session, SessionStore, async_trait};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 /// A session store that serializes the entire session into a Cookie.
 ///
@@ -32,14 +33,14 @@ impl CookieStore {
 #[async_trait]
 impl SessionStore for CookieStore {
     async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
-        let serialized = base64::decode(cookie_value)?;
-        let session: Session = bincode::deserialize(&serialized)?;
+        let serialized = BASE64_STANDARD.decode(cookie_value)?;
+        let session: Session = postcard::from_bytes(&serialized)?;
         Ok(session.validate())
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
-        let serialized = bincode::serialize(&session)?;
-        Ok(Some(base64::encode(serialized)))
+        let serialized = postcard::to_stdvec(&session)?;
+        Ok(Some(BASE64_STANDARD.encode(serialized)))
     }
 
     async fn destroy_session(&self, _session: Session) -> Result {
@@ -54,9 +55,9 @@ impl SessionStore for CookieStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_std::task;
     use std::time::Duration;
-    #[async_std::test]
+
+    #[tokio::test]
     async fn creating_a_new_session_with_no_expiry() -> Result {
         let store = CookieStore::new();
         let mut session = Session::new();
@@ -71,7 +72,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn updating_a_session() -> Result {
         let store = CookieStore::new();
         let mut session = Session::new();
@@ -89,7 +90,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn updating_a_session_extending_expiry() -> Result {
         let store = CookieStore::new();
         let mut session = Session::new();
@@ -107,13 +108,13 @@ mod tests {
         let session = store.load_session(cookie_value.clone()).await?.unwrap();
         assert_eq!(session.expiry().unwrap(), &new_expires);
 
-        task::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         assert_eq!(None, store.load_session(cookie_value).await?);
 
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn creating_a_new_session_with_expiry() -> Result {
         let store = CookieStore::new();
         let mut session = Session::new();
@@ -129,7 +130,7 @@ mod tests {
 
         assert!(!loaded_session.is_expired());
 
-        task::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         assert_eq!(None, store.load_session(cookie_value).await?);
 
         Ok(())
