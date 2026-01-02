@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime as DateTime;
@@ -29,7 +30,8 @@ use time::OffsetDateTime as DateTime;
 /// ### Change tracking example
 /// ```rust
 /// # use saysion::Session;
-/// # fn main() -> saysion::Result { async_std::task::block_on(async {
+/// # #[tokio::main]
+/// # async fn main() -> saysion::Result {
 /// let mut session = Session::new();
 /// assert!(!session.data_changed());
 ///
@@ -53,7 +55,7 @@ use time::OffsetDateTime as DateTime;
 /// assert!(!session.data_changed());
 /// session.remove("key");
 /// assert!(session.data_changed());
-/// # Ok(()) }) }
+/// # Ok(()) }
 /// ```
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Session {
@@ -91,8 +93,8 @@ impl Default for Session {
 /// generates a random cookie value
 fn generate_cookie(len: usize) -> String {
     let mut key = vec![0u8; len];
-    rand::thread_rng().fill_bytes(&mut key);
-    base64::encode(key)
+    rand::rng().fill_bytes(&mut key);
+    BASE64_STANDARD.encode(key)
 }
 
 impl Session {
@@ -144,9 +146,9 @@ impl Session {
     /// # }
     /// ```
     pub fn id_from_cookie_value(string: &str) -> Result<String, base64::DecodeError> {
-        let decoded = base64::decode(string)?;
+        let decoded = BASE64_STANDARD.decode(string)?;
         let hash = blake3::hash(&decoded);
-        Ok(base64::encode(hash.as_bytes()))
+        Ok(BASE64_STANDARD.encode(hash.as_bytes()))
     }
 
     /// mark this session for destruction. the actual session record

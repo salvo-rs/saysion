@@ -1,6 +1,8 @@
-use crate::{Result, Session, SessionStore, async_trait};
-use async_lock::RwLock;
 use std::{collections::HashMap, sync::Arc};
+
+use async_lock::RwLock;
+
+use crate::{Result, Session, SessionStore, async_trait};
 
 /// # in-memory session store
 /// Because there is no external
@@ -105,12 +107,13 @@ impl MemoryStore {
     /// # Example
     /// ```rust
     /// # use saysion::{MemoryStore, Session, SessionStore};
-    /// # fn main() -> saysion::Result { async_std::task::block_on(async {
+    /// # #[tokio::main]
+    /// # async fn main() -> saysion::Result {
     /// let mut store = MemoryStore::new();
     /// assert_eq!(store.count().await, 0);
     /// store.store_session(Session::new()).await?;
     /// assert_eq!(store.count().await, 1);
-    /// # Ok(()) }) }
+    /// # Ok(()) }
     /// ```
     pub async fn count(&self) -> usize {
         let data = self.inner.read().await;
@@ -121,9 +124,9 @@ impl MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_std::task;
     use std::time::Duration;
-    #[async_std::test]
+
+    #[tokio::test]
     async fn creating_a_new_session_with_no_expiry() -> Result {
         let store = MemoryStore::new();
         let mut session = Session::new();
@@ -138,7 +141,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn updating_a_session() -> Result {
         let store = MemoryStore::new();
         let mut session = Session::new();
@@ -156,7 +159,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn updating_a_session_extending_expiry() -> Result {
         let store = MemoryStore::new();
         let mut session = Session::new();
@@ -174,13 +177,13 @@ mod tests {
         let session = store.load_session(cookie_value.clone()).await?.unwrap();
         assert_eq!(session.expiry().unwrap(), &new_expires);
 
-        task::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         assert_eq!(None, store.load_session(cookie_value).await?);
 
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn creating_a_new_session_with_expiry() -> Result {
         let store = MemoryStore::new();
         let mut session = Session::new();
@@ -196,13 +199,13 @@ mod tests {
 
         assert!(!loaded_session.is_expired());
 
-        task::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         assert_eq!(None, store.load_session(cookie_value).await?);
 
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn destroying_a_single_session() -> Result {
         let store = MemoryStore::new();
         for _ in 0..3i8 {
@@ -221,7 +224,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn clearing_the_whole_store() -> Result {
         let store = MemoryStore::new();
         for _ in 0..3i8 {
