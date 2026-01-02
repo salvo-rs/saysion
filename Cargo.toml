@@ -13,6 +13,7 @@ categories = []
 authors = [
   "Yoshua Wuyts <yoshuawuyts@gmail.com>",
   "Jacob Rothstein <hi@jbr.me>",
+  "chrislearn <chris@acroidea.com>"
 ]
 
 [dependencies]
