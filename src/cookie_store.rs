@@ -1,4 +1,4 @@
-use crate::{async_trait, Result, Session, SessionStore};
+use crate::{Result, Session, SessionStore, async_trait};
 
 /// A session store that serializes the entire session into a Cookie.
 ///
@@ -33,12 +33,12 @@ impl CookieStore {
 impl SessionStore for CookieStore {
     async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
         let serialized = base64::decode(cookie_value)?;
-        let session: Session = bincode::deserialize(&serialized)?;
+        let session: Session = postcard::from_bytes(&serialized)?;
         Ok(session.validate())
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
-        let serialized = bincode::serialize(&session)?;
+        let serialized = postcard::to_stdvec(&session)?;
         Ok(Some(base64::encode(serialized)))
     }
 

@@ -1,4 +1,4 @@
-use crate::{async_trait, log, Result, Session, SessionStore};
+use crate::{Result, Session, SessionStore, async_trait};
 use async_lock::RwLock;
 use std::{collections::HashMap, sync::Arc};
 
@@ -35,7 +35,7 @@ pub struct MemoryStore {
 impl SessionStore for MemoryStore {
     async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
         let id = Session::id_from_cookie_value(&cookie_value)?;
-        log::trace!("loading session by id `{}`", id);
+        tracing::debug!("loading session by id `{}`", id);
         Ok(self
             .inner
             .read()
@@ -46,7 +46,7 @@ impl SessionStore for MemoryStore {
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
-        log::trace!("storing session by id `{}`", session.id());
+        tracing::debug!("storing session by id `{}`", session.id());
         self.inner
             .write()
             .await
@@ -57,13 +57,13 @@ impl SessionStore for MemoryStore {
     }
 
     async fn destroy_session(&self, session: Session) -> Result {
-        log::trace!("destroying session by id `{}`", session.id());
+        tracing::debug!("destroying session by id `{}`", session.id());
         self.inner.write().await.remove(session.id());
         Ok(())
     }
 
     async fn clear_store(&self) -> Result {
-        log::trace!("clearing memory store");
+        tracing::debug!("clearing memory store");
         self.inner.write().await.clear();
         Ok(())
     }
@@ -79,7 +79,7 @@ impl MemoryStore {
     /// intermittent basis if this store is run for long enough that
     /// memory accumulation is a concern
     pub async fn cleanup(&self) -> Result {
-        log::trace!("cleaning up memory store...");
+        tracing::debug!("cleaning up memory store...");
         let ids_to_delete: Vec<_> = self
             .inner
             .read()
@@ -94,7 +94,7 @@ impl MemoryStore {
             })
             .collect();
 
-        log::trace!("found {} expired sessions", ids_to_delete.len());
+        tracing::debug!("found {} expired sessions", ids_to_delete.len());
         for id in ids_to_delete {
             self.inner.write().await.remove(&id);
         }
@@ -104,8 +104,8 @@ impl MemoryStore {
     /// returns the number of elements in the memory store
     /// # Example
     /// ```rust
-    /// # use async_session::{MemoryStore, Session, SessionStore};
-    /// # fn main() -> async_session::Result { async_std::task::block_on(async {
+    /// # use saysion::{MemoryStore, Session, SessionStore};
+    /// # fn main() -> saysion::Result { async_std::task::block_on(async {
     /// let mut store = MemoryStore::new();
     /// assert_eq!(store.count().await, 0);
     /// store.store_session(Session::new()).await?;

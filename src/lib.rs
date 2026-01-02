@@ -8,9 +8,9 @@
 //! # Example
 //!
 //! ```
-//! use async_session::{Session, SessionStore, MemoryStore};
+//! use saysion::{Session, SessionStore, MemoryStore};
 //!
-//! # fn main() -> async_session::Result {
+//! # fn main() -> saysion::Result {
 //! # async_std::task::block_on(async {
 //! #
 //! // Init a new session store we can persist sessions to.
@@ -64,7 +64,6 @@ pub use async_trait::async_trait;
 pub use base64;
 pub use blake3;
 pub use hmac;
-pub use log;
 pub use serde;
 pub use serde_json;
 pub use sha2;
