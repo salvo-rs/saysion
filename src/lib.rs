@@ -60,3 +60,9 @@ pub use cookie_store::CookieStore;
 pub use memory_store::MemoryStore;
 pub use session::Session;
 pub use session_store::SessionStore;
+
+pub use base64;
+pub use blake3;
+pub use hmac;
+pub use sha2;
+pub use time;
