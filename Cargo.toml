@@ -31,5 +31,22 @@ async-lock = "3"
 time = { version = "0.3", features = ["serde"] }
 tracing = "0.1"
 
+# Optional backends
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"], optional = true }
+mongodb = { version = "3", optional = true }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls"], optional = true }
+
+[features]
+default = []
+redis = ["dep:redis"]
+mongodb = ["dep:mongodb"]
+sqlx = ["dep:sqlx"]
+sqlx-postgres = ["sqlx", "sqlx/postgres"]
+sqlx-sqlite = ["sqlx", "sqlx/sqlite"]
+sqlx-mysql = ["sqlx", "sqlx/mysql"]
+
+[package.metadata.docs.rs]
+all-features = true
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
