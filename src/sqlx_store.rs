@@ -27,7 +27,9 @@ fn expiry_unix(session: &Session) -> Option<i64> {
 }
 
 fn parse_session(json: &str) -> Option<Session> {
-    serde_json::from_str::<Session>(json).ok().and_then(Session::validate)
+    serde_json::from_str::<Session>(json)
+        .ok()
+        .and_then(Session::validate)
 }
 
 // ---------- Postgres ----------
@@ -86,7 +88,10 @@ mod pg {
                 "DELETE FROM {} WHERE expires IS NOT NULL AND expires < $1",
                 self.table
             );
-            sqlx::query(&sql).bind(now_unix()).execute(&self.pool).await?;
+            sqlx::query(&sql)
+                .bind(now_unix())
+                .execute(&self.pool)
+                .await?;
             Ok(())
         }
 
@@ -205,7 +210,10 @@ mod sqlite {
                 "DELETE FROM {} WHERE expires IS NOT NULL AND expires < ?",
                 self.table
             );
-            sqlx::query(&sql).bind(now_unix()).execute(&self.pool).await?;
+            sqlx::query(&sql)
+                .bind(now_unix())
+                .execute(&self.pool)
+                .await?;
             Ok(())
         }
 
@@ -323,7 +331,10 @@ mod mysql {
                 "DELETE FROM {} WHERE expires IS NOT NULL AND expires < ?",
                 self.table
             );
-            sqlx::query(&sql).bind(now_unix()).execute(&self.pool).await?;
+            sqlx::query(&sql)
+                .bind(now_unix())
+                .execute(&self.pool)
+                .await?;
             Ok(())
         }
 

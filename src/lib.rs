@@ -56,11 +56,15 @@ mod memory_store;
 mod session;
 mod session_store;
 
-#[cfg(feature = "redis")]
-mod redis_store;
 #[cfg(feature = "mongodb")]
 mod mongodb_store;
-#[cfg(any(feature = "sqlx-postgres", feature = "sqlx-sqlite", feature = "sqlx-mysql"))]
+#[cfg(feature = "redis")]
+mod redis_store;
+#[cfg(any(
+    feature = "sqlx-postgres",
+    feature = "sqlx-sqlite",
+    feature = "sqlx-mysql"
+))]
 mod sqlx_store;
 
 pub use cookie_store::CookieStore;
@@ -68,16 +72,16 @@ pub use memory_store::MemoryStore;
 pub use session::Session;
 pub use session_store::SessionStore;
 
-#[cfg(feature = "redis")]
-pub use redis_store::RedisStore;
 #[cfg(feature = "mongodb")]
 pub use mongodb_store::MongoDbStore;
+#[cfg(feature = "redis")]
+pub use redis_store::RedisStore;
+#[cfg(feature = "sqlx-mysql")]
+pub use sqlx_store::SqlxMySqlStore;
 #[cfg(feature = "sqlx-postgres")]
 pub use sqlx_store::SqlxPostgresStore;
 #[cfg(feature = "sqlx-sqlite")]
 pub use sqlx_store::SqlxSqliteStore;
-#[cfg(feature = "sqlx-mysql")]
-pub use sqlx_store::SqlxMySqlStore;
 
 pub use base64;
 pub use blake3;

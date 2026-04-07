@@ -53,9 +53,7 @@ impl MongoDbStore {
     }
 
     fn coll(&self) -> Collection<SessionDoc> {
-        self.client
-            .database(&self.db)
-            .collection(&self.coll_name)
+        self.client.database(&self.db).collection(&self.coll_name)
     }
 
     /// Create a TTL index on `expires_at` so MongoDB will purge
