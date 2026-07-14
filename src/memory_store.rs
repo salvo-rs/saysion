@@ -6,7 +6,7 @@ use crate::{Result, Session, SessionStore, async_trait};
 
 /// # in-memory session store
 /// Because there is no external
-/// persistance, this session store is ephemeral and will be cleared
+/// persistence, this session store is ephemeral and will be cleared
 /// on server restart.
 ///
 /// # ***READ THIS BEFORE USING IN A PRODUCTION DEPLOYMENT***
