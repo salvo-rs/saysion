@@ -5,7 +5,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 ///
 /// # ***This is not recommended for most production deployments.***
 ///
-/// This implementation uses [`bincode`](::bincode) to serialize the
+/// This implementation uses [`postcard`] to serialize the
 /// Session to decrease the size of the cookie. Note: There is a
 /// maximum of 4093 cookie bytes allowed _per domain_, so the cookie
 /// store is limited in capacity.
@@ -95,14 +95,14 @@ mod tests {
         let store = CookieStore::new();
         let mut session = Session::new();
         session.expire_in(Duration::from_secs(1));
-        let original_expires = session.expiry().unwrap().clone();
+        let original_expires = *session.expiry().unwrap();
         let cookie_value = store.store_session(session).await?.unwrap();
 
         let mut session = store.load_session(cookie_value.clone()).await?.unwrap();
 
         assert_eq!(session.expiry().unwrap(), &original_expires);
         session.expire_in(Duration::from_secs(3));
-        let new_expires = session.expiry().unwrap().clone();
+        let new_expires = *session.expiry().unwrap();
         let cookie_value = store.store_session(session).await?.unwrap();
 
         let session = store.load_session(cookie_value.clone()).await?.unwrap();

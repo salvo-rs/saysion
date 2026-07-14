@@ -164,14 +164,14 @@ mod tests {
         let store = MemoryStore::new();
         let mut session = Session::new();
         session.expire_in(Duration::from_secs(1));
-        let original_expires = session.expiry().unwrap().clone();
+        let original_expires = *session.expiry().unwrap();
         let cookie_value = store.store_session(session).await?.unwrap();
 
         let mut session = store.load_session(cookie_value.clone()).await?.unwrap();
 
         assert_eq!(session.expiry().unwrap(), &original_expires);
         session.expire_in(Duration::from_secs(3));
-        let new_expires = session.expiry().unwrap().clone();
+        let new_expires = *session.expiry().unwrap();
         assert_eq!(None, store.store_session(session).await?);
 
         let session = store.load_session(cookie_value.clone()).await?.unwrap();
