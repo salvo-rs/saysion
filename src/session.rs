@@ -98,6 +98,18 @@ fn generate_cookie(len: usize) -> String {
 }
 
 impl Session {
+    /// An independent persistence snapshot; request-local clones remain shared.
+    pub(crate) fn snapshot(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            expiry: self.expiry,
+            data: Arc::new(RwLock::new(self.data.read().unwrap().clone())),
+            cookie_value: None,
+            data_changed: Arc::new(AtomicBool::new(false)),
+            destroy: Arc::new(AtomicBool::new(self.is_destroyed())),
+        }
+    }
+
     /// Create a new session. Generates a random id and matching
     /// cookie value. Does not set an expiry by default
     ///
