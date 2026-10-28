@@ -77,7 +77,6 @@ impl std::fmt::Debug for Session {
         // application holds a session lock or handles a poisoned lock.
         f.debug_struct("Session")
             .field("expiry", &self.expiry())
-            .field("data_changed", &self.data_changed())
             .field("destroyed", &self.is_destroyed())
             .finish_non_exhaustive()
     }

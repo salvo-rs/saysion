@@ -11,6 +11,7 @@ fn session_debug_redacts_tokens_identifiers_and_data() -> saysion::Result {
     for output in [format!("{session:?}"), format!("{session:#?}")] {
         assert!(output.contains("Session"));
         assert!(output.contains("expiry"));
+        assert!(!output.contains("data_changed"));
         assert!(!output.contains("secret-cookie-token"));
         assert!(!output.contains(&id));
         assert!(!output.contains("private-session-key"));
