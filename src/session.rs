@@ -12,6 +12,18 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime as DateTime;
 
+// The serialized representation stays a plain map. Revisions are request-local
+// bookkeeping and share the map's lock so a snapshot cannot mix two revisions.
+#[derive(Default, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+struct SessionData {
+    values: HashMap<String, String>,
+    #[serde(skip)]
+    revision: u64,
+    #[serde(skip)]
+    persisted_revision: u64,
+}
+
 /// # The main session type.
 ///
 /// ## Cloning and Serialization
@@ -21,11 +33,12 @@ use time::OffsetDateTime as DateTime;
 /// is that it is set either by initialization or by a session store,
 /// and read exactly once in order to set the cookie value.
 ///
-/// ## Change tracking session tracks whether any of its inner data
-/// was changed since it was last serialized. Any session store that
-/// does not undergo a serialization-deserialization cycle must call
-/// [`Session::reset_data_changed`] in order to reset the change tracker on
-/// an individual record.
+/// ## Change tracking
+///
+/// Built-in stores acknowledge only the data snapshot they successfully saved.
+/// Changes made through a request-local clone while a save awaits I/O remain
+/// dirty. [`Session::reset_data_changed`] explicitly acknowledges the current
+/// data and must not be used to acknowledge an older asynchronous save.
 ///
 /// ### Change tracking example
 /// ```rust
@@ -61,12 +74,10 @@ use time::OffsetDateTime as DateTime;
 pub struct Session {
     id: String,
     expiry: Option<DateTime>,
-    data: Arc<RwLock<HashMap<String, String>>>,
+    data: Arc<RwLock<SessionData>>,
 
     #[serde(skip)]
     cookie_value: Option<String>,
-    #[serde(skip)]
-    data_changed: Arc<AtomicBool>,
     #[serde(skip)]
     destroy: Arc<AtomicBool>,
 }
@@ -79,7 +90,6 @@ impl Clone for Session {
             data: self.data.clone(),
             expiry: self.expiry,
             destroy: self.destroy.clone(),
-            data_changed: self.data_changed.clone(),
         }
     }
 }
@@ -100,14 +110,28 @@ fn generate_cookie(len: usize) -> String {
 impl Session {
     /// An independent persistence snapshot; request-local clones remain shared.
     pub(crate) fn snapshot(&self) -> Self {
-        Self {
+        self.persistence_snapshot().0
+    }
+
+    /// Capture data and its revision under the same lock before starting I/O.
+    pub(crate) fn persistence_snapshot(&self) -> (Self, u64) {
+        let data = self.data.read().unwrap();
+        let snapshot = Self {
             id: self.id.clone(),
             expiry: self.expiry,
-            data: Arc::new(RwLock::new(self.data.read().unwrap().clone())),
+            data: Arc::new(RwLock::new(SessionData {
+                values: data.values.clone(),
+                ..SessionData::default()
+            })),
             cookie_value: None,
-            data_changed: Arc::new(AtomicBool::new(false)),
             destroy: Arc::new(AtomicBool::new(self.is_destroyed())),
-        }
+        };
+        (snapshot, data.revision)
+    }
+
+    /// Acknowledge only the data represented by a successfully saved snapshot.
+    pub(crate) fn acknowledge_revision(&self, revision: u64) {
+        self.data.write().unwrap().persisted_revision = revision;
     }
 
     /// Create a new session. Generates a random id and matching
@@ -130,9 +154,8 @@ impl Session {
         let id = Session::id_from_cookie_value(&cookie_value).unwrap();
 
         Self {
-            data_changed: Arc::new(AtomicBool::new(false)),
             expiry: None,
-            data: Arc::new(RwLock::new(HashMap::default())),
+            data: Arc::new(RwLock::new(SessionData::default())),
             cookie_value: Some(cookie_value),
             id,
             destroy: Arc::new(AtomicBool::new(false)),
@@ -257,9 +280,9 @@ impl Session {
     /// ```
     pub fn insert_raw(&mut self, key: &str, value: String) {
         let mut data = self.data.write().unwrap();
-        if data.get(key) != Some(&value) {
-            data.insert(key.to_string(), value);
-            self.data_changed.store(true, Ordering::Release);
+        if data.values.get(key) != Some(&value) {
+            data.values.insert(key.to_string(), value);
+            data.revision = data.revision.wrapping_add(1);
         }
     }
 
@@ -279,7 +302,7 @@ impl Session {
     /// ```
     pub fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
         let data = self.data.read().unwrap();
-        let string = data.get(key)?;
+        let string = data.values.get(key)?;
         serde_json::from_str(string).ok()
     }
 
@@ -298,7 +321,7 @@ impl Session {
     /// ```
     pub fn get_raw(&self, key: &str) -> Option<String> {
         let data = self.data.read().unwrap();
-        data.get(key).cloned()
+        data.values.get(key).cloned()
     }
 
     /// removes an entry from the session hashmap
@@ -318,8 +341,8 @@ impl Session {
     /// ```
     pub fn remove(&mut self, key: &str) {
         let mut data = self.data.write().unwrap();
-        if data.remove(key).is_some() {
-            self.data_changed.store(true, Ordering::Release);
+        if data.values.remove(key).is_some() {
+            data.revision = data.revision.wrapping_add(1);
         }
     }
 
@@ -338,7 +361,7 @@ impl Session {
     /// # }
     /// ```
     pub fn len(&self) -> usize {
-        self.data.read().unwrap().len()
+        self.data.read().unwrap().values.len()
     }
 
     /// returns a boolean indicating whether there are zero elements in the session hashmap
@@ -356,7 +379,7 @@ impl Session {
     /// # }
     /// ```
     pub fn is_empty(&self) -> bool {
-        return self.data.read().unwrap().is_empty();
+        return self.data.read().unwrap().values.is_empty();
     }
 
     /// Generates a new id and cookie for this session
@@ -529,12 +552,14 @@ impl Session {
     /// # }
     /// ```
     pub fn data_changed(&self) -> bool {
-        self.data_changed.load(Ordering::Acquire)
+        let data = self.data.read().unwrap();
+        data.revision != data.persisted_revision
     }
 
-    /// Resets `data_changed` dirty tracking. This is unnecessary for
-    /// any session store that serializes the data to a string on
-    /// storage.
+    /// Marks the current data as unchanged. Built-in stores instead acknowledge
+    /// the exact snapshot they persisted, so edits made during I/O stay dirty.
+    /// Custom stores must not call this after asynchronous I/O when clones may
+    /// have modified the session in the meantime.
     ///
     /// # Example
     ///
@@ -554,7 +579,8 @@ impl Session {
     /// # }
     /// ```
     pub fn reset_data_changed(&self) {
-        self.data_changed.store(false, Ordering::SeqCst);
+        let mut data = self.data.write().unwrap();
+        data.persisted_revision = data.revision;
     }
 
     /// Duration from now to the expiry time of this session

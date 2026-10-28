@@ -93,8 +93,9 @@ impl SessionStore for MongoDbStore {
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let id = session.id().to_string();
         tracing::debug!("storing session by id `{}`", id);
-        let json = serde_json::to_string(&session)?;
-        let expires_at = session
+        let (snapshot, revision) = session.persistence_snapshot();
+        let json = serde_json::to_string(&snapshot)?;
+        let expires_at = snapshot
             .expiry()
             .map(|e| BsonDateTime::from_millis(e.unix_timestamp() * 1000));
         let doc_value = SessionDoc {
@@ -106,7 +107,7 @@ impl SessionStore for MongoDbStore {
             .replace_one(doc! { "_id": &id }, &doc_value)
             .upsert(true)
             .await?;
-        session.reset_data_changed();
+        session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
     }
 
