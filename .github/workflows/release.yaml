@@ -22,8 +22,8 @@ jobs:
         id: archive
         run: echo "data=$(git archive --format=tar.gz "$GITHUB_SHA" | base64 -w 0)" >> "$GITHUB_OUTPUT"
 
-      - name: Install Rust 1.92
-        uses: dtolnay/rust-toolchain@1.92.0
+      - name: Install Rust 1.95
+        uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Cache cargo registry
         uses: actions/cache@v6
