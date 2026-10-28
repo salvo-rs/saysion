@@ -153,4 +153,3 @@ async fn sqlite_failed_save_keeps_changes_pending() -> saysion::Result {
     assert!(observer.data_changed());
     Ok(())
 }
-
