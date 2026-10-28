@@ -7,6 +7,7 @@ behind cargo features so you only pull in the dependencies you need.
 |---------------------|------------------|------------------|
 | `MemoryStore`       | *(always on)*    | In-process       |
 | `CookieStore`       | *(always on)*    | Client cookie    |
+| `SignedCookieStore` | *(always on)*    | HMAC-authenticated client cookie |
 | `RedisStore`        | `redis`          | Redis            |
 | `MongoDbStore`      | `mongodb`        | MongoDB          |
 | `SqlxPostgresStore` | `sqlx-postgres`  | PostgreSQL       |
@@ -14,7 +15,27 @@ behind cargo features so you only pull in the dependencies you need.
 | `SqlxMySqlStore`    | `sqlx-mysql`     | MySQL / MariaDB  |
 
 All stores implement the [`SessionStore`] trait, so they are
-interchangeable.
+interchangeable subject to their security and revocation requirements.
+
+## Client-side cookies
+
+`CookieStore` is an **unsigned, unencrypted codec** for middleware that already
+authenticates the complete cookie value, such as Salvo's session handler. Do not
+accept its raw output from an untrusted client without that protection.
+
+Use `SignedCookieStore::new(secret_key)?` when the middleware does not provide
+authentication. Supply at least 32 bytes of random secret key material, persist
+the key across restarts, and set a finite session expiry. To rotate keys, use
+`SignedCookieStore::new(new_key)?.with_fallback_key(old_key)?`; old keys verify
+existing values while new values use the current key. Unsigned `CookieStore`
+values are never accepted as a migration fallback.
+
+Signed values are limited to 3800 bytes; middleware must also account for cookie
+names, attributes, and any outer signature. Neither store encrypts its contents
+or supports server-side revocation. Removing the browser cookie does not revoke
+copied values. Use a server-side store for confidential data or immediate logout
+revocation, and set `Secure`, `HttpOnly`, and an appropriate `SameSite` policy in
+the HTTP middleware.
 
 ## Redis
 

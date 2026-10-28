@@ -55,6 +55,7 @@ mod cookie_store;
 mod memory_store;
 mod session;
 mod session_store;
+mod signed_cookie_store;
 
 #[cfg(feature = "mongodb")]
 mod mongodb_store;
@@ -71,6 +72,7 @@ pub use cookie_store::CookieStore;
 pub use memory_store::MemoryStore;
 pub use session::Session;
 pub use session_store::SessionStore;
+pub use signed_cookie_store::SignedCookieStore;
 
 #[cfg(feature = "mongodb")]
 pub use mongodb_store::MongoDbStore;
