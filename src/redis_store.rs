@@ -87,8 +87,14 @@ impl SessionStore for RedisStore {
         tracing::debug!("storing session by id `{}`", id);
         let json = serde_json::to_string(&session)?;
         let mut conn = self.conn.clone();
-        match session.expires_in() {
-            Some(ttl) => {
+        match session.expiry() {
+            Some(_) => {
+                let Some(ttl) = session.expires_in() else {
+                    // An expired timestamp is distinct from no expiry. Never
+                    // replace a finite TTL with a permanent Redis key.
+                    let _: () = conn.del(self.key(&id)).await?;
+                    return Ok(None);
+                };
                 let _: () = conn.pset_ex(self.key(&id), json, ttl_millis(ttl)?).await?;
             }
             None => {
