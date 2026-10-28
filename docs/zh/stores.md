@@ -110,8 +110,11 @@ async fn main() -> saysion::Result {
     let loaded = store.load_session(cookie).await?.unwrap();
     assert_eq!(loaded.get::<i32>("user_id"), Some(42));
 
-    // 定期清理过期记录。
+    // 定期清理一批过期记录（每次至多 1,000 条）。
     store.cleanup().await?;
+    // 也可以选择 1..=10,000 条的批量上限，并根据返回数量安排后续清理。
+    let removed = store.cleanup_batch(500).await?;
+    println!("已清理 {removed} 条过期会话");
     Ok(())
 }
 ```
@@ -136,6 +139,12 @@ let store = saysion::SqlxMySqlStore::from_url("mysql://root:root@127.0.0.1/myapp
 
 过期时间存为 unix 秒整数,使三种数据库的查询完全一致,也避免了
 为 sqlx 启用额外的时间类型转换 feature。
+
+`migrate()` 还会为已有表添加过期索引，可以重复调用。
+`cleanup()` 每次最多删除 1,000 条记录；`cleanup_batch(limit)` 允许指定
+1 到 10,000 条的上限，并返回删除数量。两者每次只执行一批，不会循环清空
+整张表，调用方应按需安排后续清理。秒级字段继续兼容旧数据；加载时会校验
+序列化会话中的精确过期时间，清理时暂时保留当前秒的记录，避免提前删除。
 
 ## 在多个 handler 之间共享 store
 

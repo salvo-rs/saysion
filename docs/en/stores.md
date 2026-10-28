@@ -114,8 +114,11 @@ async fn main() -> saysion::Result {
     let loaded = store.load_session(cookie).await?.unwrap();
     assert_eq!(loaded.get::<i32>("user_id"), Some(42));
 
-    // Periodically remove expired rows.
+    // Periodically remove one bounded batch (at most 1,000 expired rows).
     store.cleanup().await?;
+    // Or choose 1..=10,000 rows and inspect progress for scheduling.
+    let removed = store.cleanup_batch(500).await?;
+    println!("removed {removed} expired sessions");
     Ok(())
 }
 ```
@@ -141,6 +144,14 @@ via `with_table`, defaults to `saysion_sessions`):
 Storing the expiry as a unix-second integer keeps queries portable
 across all three databases without pulling in extra type-conversion
 features.
+
+`migrate()` also adds an expiry index to existing tables and is safe to repeat.
+`cleanup()` deletes at most 1,000 rows per call. Use `cleanup_batch(limit)` with
+a limit from 1 to 10,000 to control each delete statement and obtain its deleted
+row count. Schedule further calls as needed; neither method loops until the
+whole table is clean. The seconds column remains compatible with older data;
+loads validate the precise expiry from the serialized session, and cleanup
+leaves the current second alone to avoid deleting a still-valid session.
 
 ## Sharing a store between handlers
 
