@@ -44,17 +44,24 @@ impl SessionStore for MemoryStore {
             .await
             .get(&id)
             .map(Session::snapshot)
-            .and_then(Session::validate))
+            .and_then(Session::validate)
+            .map(Session::mark_loaded))
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         tracing::debug!("storing session by id `{}`", session.id());
+        let origin = session.persistence_origin()?;
         let (snapshot, revision) = session.persistence_snapshot();
-        self.inner
-            .write()
-            .await
-            .insert(session.id().to_string(), snapshot);
+        let mut records = self.inner.write().await;
+        if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != session.id()) {
+            if records.remove(old_id).is_none() {
+                return Err(crate::SessionConflict.into());
+            }
+        }
+        records.insert(session.id().to_string(), snapshot.mark_loaded());
+        drop(records);
 
+        session.mark_persisted();
         session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
     }

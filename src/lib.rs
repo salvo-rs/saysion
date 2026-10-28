@@ -70,7 +70,7 @@ mod sqlx_store;
 pub use cookie_store::CookieStore;
 pub use memory_store::MemoryStore;
 pub use session::Session;
-pub use session_store::SessionStore;
+pub use session_store::{SessionConflict, SessionStore};
 
 #[cfg(feature = "mongodb")]
 pub use mongodb_store::MongoDbStore;

@@ -116,25 +116,48 @@ mod pg {
                 .bind(now_unix())
                 .fetch_optional(&self.pool)
                 .await?;
-            Ok(row.and_then(|(s,)| parse_session(&s)))
+            Ok(row
+                .and_then(|(s,)| parse_session(&s))
+                .map(Session::mark_loaded))
         }
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
+            let origin = session.persistence_origin()?;
+            let rotating = origin
+                .as_deref()
+                .is_some_and(|origin| origin != id.as_str());
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
             let expires = expiry_unix(&snapshot);
-            let sql = format!(
-                "INSERT INTO {table} (id, expires, session) VALUES ($1, $2, $3) \
-                 ON CONFLICT (id) DO UPDATE SET expires = EXCLUDED.expires, session = EXCLUDED.session",
-                table = self.table
-            );
+            let mut tx = self.pool.begin().await?;
+            if let Some(origin) = origin.as_deref().filter(|_| rotating) {
+                let delete = format!("DELETE FROM {} WHERE id = $1", self.table);
+                let removed = sqlx::query(&delete).bind(origin).execute(&mut *tx).await?;
+                if removed.rows_affected() != 1 {
+                    return Err(crate::SessionConflict.into());
+                }
+            }
+            let sql = if rotating {
+                format!(
+                    "INSERT INTO {} (id, expires, session) VALUES ($1, $2, $3)",
+                    self.table
+                )
+            } else {
+                format!(
+                    "INSERT INTO {table} (id, expires, session) VALUES ($1, $2, $3) \
+                     ON CONFLICT (id) DO UPDATE SET expires = EXCLUDED.expires, session = EXCLUDED.session",
+                    table = self.table
+                )
+            };
             sqlx::query(&sql)
                 .bind(&id)
                 .bind(expires)
                 .bind(&json)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
+            session.mark_persisted();
             session.acknowledge_revision(revision);
             Ok(session.into_cookie_value())
         }
@@ -238,25 +261,48 @@ mod sqlite {
                 .bind(now_unix())
                 .fetch_optional(&self.pool)
                 .await?;
-            Ok(row.and_then(|(s,)| parse_session(&s)))
+            Ok(row
+                .and_then(|(s,)| parse_session(&s))
+                .map(Session::mark_loaded))
         }
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
+            let origin = session.persistence_origin()?;
+            let rotating = origin
+                .as_deref()
+                .is_some_and(|origin| origin != id.as_str());
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
             let expires = expiry_unix(&snapshot);
-            let sql = format!(
-                "INSERT INTO {table} (id, expires, session) VALUES (?, ?, ?) \
-                 ON CONFLICT(id) DO UPDATE SET expires = excluded.expires, session = excluded.session",
-                table = self.table
-            );
+            let mut tx = self.pool.begin().await?;
+            if let Some(origin) = origin.as_deref().filter(|_| rotating) {
+                let delete = format!("DELETE FROM {} WHERE id = ?", self.table);
+                let removed = sqlx::query(&delete).bind(origin).execute(&mut *tx).await?;
+                if removed.rows_affected() != 1 {
+                    return Err(crate::SessionConflict.into());
+                }
+            }
+            let sql = if rotating {
+                format!(
+                    "INSERT INTO {} (id, expires, session) VALUES (?, ?, ?)",
+                    self.table
+                )
+            } else {
+                format!(
+                    "INSERT INTO {table} (id, expires, session) VALUES (?, ?, ?) \
+                     ON CONFLICT(id) DO UPDATE SET expires = excluded.expires, session = excluded.session",
+                    table = self.table
+                )
+            };
             sqlx::query(&sql)
                 .bind(&id)
                 .bind(expires)
                 .bind(&json)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
+            session.mark_persisted();
             session.acknowledge_revision(revision);
             Ok(session.into_cookie_value())
         }
@@ -360,25 +406,48 @@ mod mysql {
                 .bind(now_unix())
                 .fetch_optional(&self.pool)
                 .await?;
-            Ok(row.and_then(|(s,)| parse_session(&s)))
+            Ok(row
+                .and_then(|(s,)| parse_session(&s))
+                .map(Session::mark_loaded))
         }
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
+            let origin = session.persistence_origin()?;
+            let rotating = origin
+                .as_deref()
+                .is_some_and(|origin| origin != id.as_str());
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
             let expires = expiry_unix(&snapshot);
-            let sql = format!(
-                "INSERT INTO {table} (id, expires, session) VALUES (?, ?, ?) \
-                 ON DUPLICATE KEY UPDATE expires = VALUES(expires), session = VALUES(session)",
-                table = self.table
-            );
+            let mut tx = self.pool.begin().await?;
+            if let Some(origin) = origin.as_deref().filter(|_| rotating) {
+                let delete = format!("DELETE FROM {} WHERE id = ?", self.table);
+                let removed = sqlx::query(&delete).bind(origin).execute(&mut *tx).await?;
+                if removed.rows_affected() != 1 {
+                    return Err(crate::SessionConflict.into());
+                }
+            }
+            let sql = if rotating {
+                format!(
+                    "INSERT INTO {} (id, expires, session) VALUES (?, ?, ?)",
+                    self.table
+                )
+            } else {
+                format!(
+                    "INSERT INTO {table} (id, expires, session) VALUES (?, ?, ?) \
+                     ON DUPLICATE KEY UPDATE expires = VALUES(expires), session = VALUES(session)",
+                    table = self.table
+                )
+            };
             sqlx::query(&sql)
                 .bind(&id)
                 .bind(expires)
                 .bind(&json)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
+            session.mark_persisted();
             session.acknowledge_revision(revision);
             Ok(session.into_cookie_value())
         }

@@ -81,6 +81,12 @@ pub struct Session {
     #[serde(skip)]
     metadata_changed: AtomicBool,
     #[serde(skip)]
+    persisted_id: Arc<RwLock<Option<String>>>,
+    #[serde(skip)]
+    rotation_from: Option<String>,
+    #[serde(skip)]
+    fresh: bool,
+    #[serde(skip)]
     destroy: Arc<AtomicBool>,
 }
 
@@ -93,6 +99,9 @@ impl Clone for Session {
             expiry: self.expiry,
             destroy: self.destroy.clone(),
             metadata_changed: AtomicBool::new(self.metadata_changed.load(Ordering::Acquire)),
+            persisted_id: self.persisted_id.clone(),
+            rotation_from: self.rotation_from.clone(),
+            fresh: self.fresh,
         }
     }
 }
@@ -128,6 +137,9 @@ impl Session {
             })),
             cookie_value: None,
             metadata_changed: AtomicBool::new(false),
+            persisted_id: Arc::new(RwLock::new(None)),
+            rotation_from: None,
+            fresh: false,
             destroy: Arc::new(AtomicBool::new(self.is_destroyed())),
         };
         (snapshot, data.revision)
@@ -137,6 +149,33 @@ impl Session {
     pub(crate) fn acknowledge_revision(&self, revision: u64) {
         self.data.write().unwrap().persisted_revision = revision;
         self.metadata_changed.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn persistence_origin(&self) -> crate::Result<Option<String>> {
+        let origin = self.persisted_id.read().unwrap().clone();
+        if origin.is_none() && !self.fresh {
+            return Err(crate::SessionConflict.into());
+        }
+        if let Some(id) = origin.as_deref()
+            && id != self.id
+            && self.rotation_from.as_deref() != Some(id)
+        {
+            return Err(crate::SessionConflict.into());
+        }
+        Ok(origin)
+    }
+
+    pub(crate) fn mark_persisted(&self) {
+        let mut origin = self.persisted_id.write().unwrap();
+        // Never let a late update completion roll back a rotated identity.
+        if origin.is_none() || self.rotation_from.as_deref() == origin.as_deref() {
+            *origin = Some(self.id.clone());
+        }
+    }
+
+    pub(crate) fn mark_loaded(self) -> Self {
+        self.mark_persisted();
+        self
     }
 
     /// Create a new session. Generates a random id and matching
@@ -163,6 +202,9 @@ impl Session {
             data: Arc::new(RwLock::new(SessionData::default())),
             cookie_value: Some(cookie_value),
             metadata_changed: AtomicBool::new(false),
+            persisted_id: Arc::new(RwLock::new(None)),
+            rotation_from: None,
+            fresh: true,
             id,
             destroy: Arc::new(AtomicBool::new(false)),
         }
@@ -407,6 +449,12 @@ impl Session {
     /// # }
     /// ```
     pub fn regenerate(&mut self) {
+        let origin = self.persisted_id.read().unwrap().clone();
+        // A clone that has already been superseded must not turn a stale
+        // identity into a new rotation of another clone's saved identity.
+        if origin.as_deref() == Some(self.id.as_str()) || self.rotation_from == origin {
+            self.rotation_from = origin;
+        }
         let cookie_value = generate_cookie(64);
         self.id = Session::id_from_cookie_value(&cookie_value).unwrap();
         self.cookie_value = Some(cookie_value);

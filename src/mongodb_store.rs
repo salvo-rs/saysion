@@ -86,13 +86,16 @@ impl SessionStore for MongoDbStore {
         let found = self.coll().find_one(doc! { "_id": &id }).await?;
         Ok(match found {
             None => None,
-            Some(d) => serde_json::from_str::<Session>(&d.session)?.validate(),
+            Some(d) => serde_json::from_str::<Session>(&d.session)?
+                .validate()
+                .map(Session::mark_loaded),
         })
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let id = session.id().to_string();
         tracing::debug!("storing session by id `{}`", id);
+        let origin = session.persistence_origin()?;
         let (snapshot, revision) = session.persistence_snapshot();
         let json = serde_json::to_string(&snapshot)?;
         let expires_at = snapshot
@@ -103,10 +106,26 @@ impl SessionStore for MongoDbStore {
             expires_at,
             session: json,
         };
-        self.coll()
-            .replace_one(doc! { "_id": &id }, &doc_value)
-            .upsert(true)
-            .await?;
+        if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != id) {
+            // Standalone MongoDB has no multi-document transactions. Revoke
+            // first, so any failure leaves the old credential unusable.
+            if self
+                .coll()
+                .delete_one(doc! { "_id": old_id })
+                .await?
+                .deleted_count
+                == 0
+            {
+                return Err(crate::SessionConflict.into());
+            }
+            self.coll().insert_one(&doc_value).await?;
+        } else {
+            self.coll()
+                .replace_one(doc! { "_id": &id }, &doc_value)
+                .upsert(true)
+                .await?;
+        }
+        session.mark_persisted();
         session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
     }

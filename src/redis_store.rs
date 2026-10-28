@@ -74,16 +74,53 @@ impl SessionStore for RedisStore {
         let value: Option<String> = conn.get(self.key(&id)).await?;
         Ok(match value {
             None => None,
-            Some(v) => serde_json::from_str::<Session>(&v)?.validate(),
+            Some(v) => serde_json::from_str::<Session>(&v)?
+                .validate()
+                .map(Session::mark_loaded),
         })
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let id = session.id().to_string();
         tracing::debug!("storing session by id `{}`", id);
+        let origin = session.persistence_origin()?;
         let (snapshot, revision) = session.persistence_snapshot();
         let json = serde_json::to_string(&snapshot)?;
         let mut conn = self.conn.clone();
+        if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != id) {
+            let ttl = snapshot
+                .expires_in()
+                .map(|ttl| ttl.as_secs().max(1))
+                .unwrap_or(0);
+            let rotated: i64 = redis::cmd("EVAL")
+                .arg(
+                    r#"
+                    if redis.call('EXISTS', KEYS[1]) == 0 or redis.call('EXISTS', KEYS[2]) == 1 then
+                        return 0
+                    end
+                    if tonumber(ARGV[2]) > 0 then
+                        redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2])
+                    else
+                        redis.call('SET', KEYS[2], ARGV[1])
+                    end
+                    redis.call('DEL', KEYS[1])
+                    return 1
+                "#,
+                )
+                .arg(2)
+                .arg(self.key(old_id))
+                .arg(self.key(&id))
+                .arg(&json)
+                .arg(ttl)
+                .query_async(&mut conn)
+                .await?;
+            if rotated == 0 {
+                return Err(crate::SessionConflict.into());
+            }
+            session.mark_persisted();
+            session.acknowledge_revision(revision);
+            return Ok(session.into_cookie_value());
+        }
         match snapshot.expires_in() {
             Some(ttl) => {
                 let _: () = conn
@@ -94,6 +131,7 @@ impl SessionStore for RedisStore {
                 let _: () = conn.set(self.key(&id), json).await?;
             }
         }
+        session.mark_persisted();
         session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
     }
