@@ -9,6 +9,10 @@ use crate::{Result, Session, SessionStore, async_trait};
 
 const DEFAULT_PREFIX: &str = "saysion/";
 
+fn ttl_millis(ttl: std::time::Duration) -> Result<u64> {
+    Ok(u64::try_from(ttl.as_nanos().div_ceil(1_000_000))?.max(1))
+}
+
 /// A session store backed by Redis.
 ///
 /// Internally uses [`redis::aio::ConnectionManager`] which provides
@@ -85,9 +89,7 @@ impl SessionStore for RedisStore {
         let mut conn = self.conn.clone();
         match session.expires_in() {
             Some(ttl) => {
-                let _: () = conn
-                    .set_ex(self.key(&id), json, ttl.as_secs().max(1))
-                    .await?;
+                let _: () = conn.pset_ex(self.key(&id), json, ttl_millis(ttl)?).await?;
             }
             None => {
                 let _: () = conn.set(self.key(&id), json).await?;
@@ -113,5 +115,19 @@ impl SessionStore for RedisStore {
             let _: () = conn.del(keys).await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn redis_ttl_rounds_up_to_milliseconds() {
+        assert_eq!(ttl_millis(Duration::ZERO).unwrap(), 1);
+        assert_eq!(ttl_millis(Duration::from_nanos(1)).unwrap(), 1);
+        assert_eq!(ttl_millis(Duration::from_micros(1_001)).unwrap(), 2);
+        assert_eq!(ttl_millis(Duration::from_millis(1_999)).unwrap(), 1_999);
     }
 }

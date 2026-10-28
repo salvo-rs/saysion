@@ -23,6 +23,8 @@ fn now_unix() -> i64 {
 }
 
 fn expiry_unix(session: &Session) -> Option<i64> {
+    // Keep the existing seconds schema. Loads include this entire second and
+    // validate the exact timestamp from the serialized session afterward.
     session.expiry().map(|e| e.unix_timestamp())
 }
 
@@ -108,7 +110,7 @@ mod pg {
         async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
             let id = Session::id_from_cookie_value(&cookie_value)?;
             let sql = format!(
-                "SELECT session FROM {} WHERE id = $1 AND (expires IS NULL OR expires > $2)",
+                "SELECT session FROM {} WHERE id = $1 AND (expires IS NULL OR expires >= $2)",
                 self.table
             );
             let row: Option<(String,)> = sqlx::query_as(&sql)
@@ -229,7 +231,7 @@ mod sqlite {
         async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
             let id = Session::id_from_cookie_value(&cookie_value)?;
             let sql = format!(
-                "SELECT session FROM {} WHERE id = ? AND (expires IS NULL OR expires > ?)",
+                "SELECT session FROM {} WHERE id = ? AND (expires IS NULL OR expires >= ?)",
                 self.table
             );
             let row: Option<(String,)> = sqlx::query_as(&sql)
@@ -350,7 +352,7 @@ mod mysql {
         async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
             let id = Session::id_from_cookie_value(&cookie_value)?;
             let sql = format!(
-                "SELECT session FROM {} WHERE id = ? AND (expires IS NULL OR expires > ?)",
+                "SELECT session FROM {} WHERE id = ? AND (expires IS NULL OR expires >= ?)",
                 self.table
             );
             let row: Option<(String,)> = sqlx::query_as(&sql)
