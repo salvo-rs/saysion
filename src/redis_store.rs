@@ -9,6 +9,10 @@ use crate::{Result, Session, SessionStore, async_trait};
 
 const DEFAULT_PREFIX: &str = "saysion/";
 
+fn ttl_millis(ttl: std::time::Duration) -> Result<u64> {
+    Ok(u64::try_from(ttl.as_nanos().div_ceil(1_000_000))?.max(1))
+}
+
 /// A session store backed by Redis.
 ///
 /// Internally uses [`redis::aio::ConnectionManager`] which provides
@@ -141,7 +145,7 @@ impl SessionStore for RedisStore {
             return Ok(None);
         }
         if let Some(ttl) = ttl {
-            let millis = u64::try_from(ttl.as_nanos().div_ceil(1_000_000))?.max(1);
+            let millis = ttl_millis(ttl)?;
             command.arg("PX").arg(millis);
         }
         command.arg(if origin.is_some() { "XX" } else { "NX" });
