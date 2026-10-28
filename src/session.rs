@@ -24,6 +24,11 @@ struct SessionData {
     persisted_revision: u64,
 }
 
+#[derive(Debug)]
+pub(crate) struct PersistenceAttempt {
+    pub(crate) origin: Option<String>,
+}
+
 /// # The main session type.
 ///
 /// ## Cloning and Serialization
@@ -81,6 +86,14 @@ pub struct Session {
     #[serde(skip)]
     metadata_changed: AtomicBool,
     #[serde(skip)]
+    persisted_id: Arc<RwLock<Option<String>>>,
+    #[serde(skip)]
+    rotation_from: Option<String>,
+    #[serde(skip)]
+    fresh: bool,
+    #[serde(skip)]
+    creation_claimed: Arc<AtomicBool>,
+    #[serde(skip)]
     destroy: Arc<AtomicBool>,
 }
 
@@ -104,6 +117,10 @@ impl Clone for Session {
             expiry: self.expiry,
             destroy: self.destroy.clone(),
             metadata_changed: AtomicBool::new(self.metadata_changed.load(Ordering::Acquire)),
+            persisted_id: self.persisted_id.clone(),
+            rotation_from: self.rotation_from.clone(),
+            fresh: self.fresh,
+            creation_claimed: self.creation_claimed.clone(),
         }
     }
 }
@@ -139,6 +156,10 @@ impl Session {
             })),
             cookie_value: None,
             metadata_changed: AtomicBool::new(false),
+            persisted_id: Arc::new(RwLock::new(None)),
+            rotation_from: None,
+            fresh: false,
+            creation_claimed: Arc::default(),
             destroy: Arc::new(AtomicBool::new(self.is_destroyed())),
         };
         (snapshot, data.revision)
@@ -148,6 +169,51 @@ impl Session {
     pub(crate) fn acknowledge_revision(&self, revision: u64) {
         self.data.write().unwrap().persisted_revision = revision;
         self.metadata_changed.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn persistence_origin(&self) -> crate::Result<Option<String>> {
+        let origin = self.persisted_id.read().unwrap().clone();
+        if origin.is_none() && (!self.fresh || self.creation_claimed.load(Ordering::Acquire)) {
+            return Err(crate::SessionConflict.into());
+        }
+        if let Some(id) = origin.as_deref()
+            && id != self.id
+            && self.rotation_from.as_deref() != Some(id)
+        {
+            return Err(crate::SessionConflict.into());
+        }
+        Ok(origin)
+    }
+
+    pub(crate) fn mark_persisted(&self) {
+        let mut origin = self.persisted_id.write().unwrap();
+        // Never let a late update completion roll back a rotated identity.
+        if origin.is_none() || self.rotation_from.as_deref() == origin.as_deref() {
+            *origin = Some(self.id.clone());
+        }
+    }
+
+    pub(crate) fn persistence_attempt(&self) -> crate::Result<PersistenceAttempt> {
+        if self.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
+        let attempt = PersistenceAttempt {
+            origin: self.persistence_origin()?,
+        };
+        if attempt.origin.is_none() {
+            self.creation_claimed
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .map_err(|_| crate::SessionConflict)?;
+            // Never return creation authority after starting a write: a failed
+            // or cancelled network future may already have created the record.
+            // Only a confirmed successful save publishes a persisted identity.
+        }
+        Ok(attempt)
+    }
+
+    pub(crate) fn mark_loaded(self) -> Self {
+        self.mark_persisted();
+        self
     }
 
     /// Create a new session. Generates a random id and matching
@@ -174,6 +240,10 @@ impl Session {
             data: Arc::new(RwLock::new(SessionData::default())),
             cookie_value: Some(cookie_value),
             metadata_changed: AtomicBool::new(false),
+            persisted_id: Arc::new(RwLock::new(None)),
+            rotation_from: None,
+            fresh: true,
+            creation_claimed: Arc::default(),
             id,
             destroy: Arc::new(AtomicBool::new(false)),
         }
@@ -418,6 +488,12 @@ impl Session {
     /// # }
     /// ```
     pub fn regenerate(&mut self) {
+        let origin = self.persisted_id.read().unwrap().clone();
+        // A clone that has already been superseded must not turn a stale
+        // identity into a new rotation of another clone's saved identity.
+        if origin.as_deref() == Some(self.id.as_str()) || self.rotation_from == origin {
+            self.rotation_from = origin;
+        }
         let cookie_value = generate_cookie(64);
         self.id = Session::id_from_cookie_value(&cookie_value).unwrap();
         self.cookie_value = Some(cookie_value);
@@ -506,8 +582,8 @@ impl Session {
     }
 
     /// predicate function to determine if this session is
-    /// expired. returns false if there is no expiry set, or if it is
-    /// in the past.
+    /// expired. Returns true for a timestamp in the past and false
+    /// when no expiry is set.
     ///
     /// # Example
     ///
@@ -673,5 +749,36 @@ impl Session {
 impl PartialEq for Session {
     fn eq(&self, other: &Self) -> bool {
         other.id == self.id
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn creation_authority_is_consumed_even_after_failure_or_cancellation() {
+        let session = Session::new();
+        let clone = session.clone();
+        let _attempt = session.persistence_attempt().unwrap();
+        assert!(clone.persistence_attempt().is_err());
+        assert!(session.persistence_origin().is_err());
+        assert!(clone.persistence_origin().is_err());
+    }
+
+    #[test]
+    fn a_late_update_completion_cannot_roll_back_a_rotated_marker() {
+        let mut session = Session::new().mark_loaded();
+        let mut old = session.clone();
+        session.regenerate();
+        session.mark_persisted();
+        old.mark_persisted();
+        assert_eq!(
+            session.persistence_origin().unwrap().as_deref(),
+            Some(session.id())
+        );
+        assert!(old.persistence_origin().is_err());
+        old.regenerate();
+        assert!(old.persistence_origin().is_err());
     }
 }

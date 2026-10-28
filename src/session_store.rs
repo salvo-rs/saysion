@@ -1,5 +1,19 @@
 use crate::{Result, Session, async_trait};
 
+/// A persisted session was removed, replaced, or concurrently rotated.
+///
+/// Discard the stale session rather than retrying it as a newly created one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionConflict;
+
+impl std::fmt::Display for SessionConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("session was removed or concurrently replaced")
+    }
+}
+
+impl std::error::Error for SessionConflict {}
+
 /// An async session backend.
 #[async_trait]
 pub trait SessionStore {
@@ -14,6 +28,11 @@ pub trait SessionStore {
     ///
     /// The return value is the value of the cookie to store for the
     /// user that represents this session
+    ///
+    /// Built-in server-side stores create records only for fresh sessions and
+    /// update existing records for loaded sessions. A removed or superseded
+    /// record returns [`SessionConflict`]; discard it instead of recreating its
+    /// authentication data. Client-side stores have no revocation state.
     async fn store_session(&self, session: Session) -> Result<Option<String>>;
 
     /// Remove a session from the session store

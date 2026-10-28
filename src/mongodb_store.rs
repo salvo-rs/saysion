@@ -93,13 +93,20 @@ impl SessionStore for MongoDbStore {
         let found = self.coll().find_one(doc! { "_id": &id }).await?;
         Ok(match found {
             None => None,
-            Some(d) => serde_json::from_str::<Session>(&d.session)?.validate(),
+            Some(d) => serde_json::from_str::<Session>(&d.session)?
+                .validate()
+                .map(Session::mark_loaded),
         })
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let id = session.id().to_string();
         tracing::debug!("storing session by id `{}`", id);
+        let attempt = session.persistence_attempt()?;
+        let origin = attempt.origin.clone();
+        if session.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
         let (snapshot, revision) = session.persistence_snapshot();
         let json = serde_json::to_string(&snapshot)?;
         let expires_at = snapshot.expiry().map(expiry_datetime);
@@ -108,17 +115,46 @@ impl SessionStore for MongoDbStore {
             expires_at,
             session: json,
         };
-        self.coll()
-            .replace_one(doc! { "_id": &id }, &doc_value)
-            .upsert(true)
-            .await?;
+        if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != id) {
+            // Standalone MongoDB has no multi-document transactions. Revoke
+            // first, so any failure leaves the old credential unusable.
+            if self
+                .coll()
+                .delete_one(doc! { "_id": old_id })
+                .await?
+                .deleted_count
+                == 0
+            {
+                return Err(crate::SessionConflict.into());
+            }
+            self.coll().insert_one(&doc_value).await?;
+        } else {
+            if origin.is_some() {
+                let result = self
+                    .coll()
+                    .replace_one(doc! { "_id": &id }, &doc_value)
+                    .await?;
+                if result.matched_count != 1 {
+                    return Err(crate::SessionConflict.into());
+                }
+            } else {
+                self.coll().insert_one(&doc_value).await?;
+            }
+        }
+        session.mark_persisted();
         session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
     }
 
-    async fn destroy_session(&self, session: Session) -> Result {
+    async fn destroy_session(&self, mut session: Session) -> Result {
         tracing::debug!("destroying session by id `{}`", session.id());
-        self.coll().delete_one(doc! { "_id": session.id() }).await?;
+        let origin = session
+            .persistence_origin()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| session.id().to_owned());
+        session.destroy();
+        self.coll().delete_one(doc! { "_id": origin }).await?;
         Ok(())
     }
 
