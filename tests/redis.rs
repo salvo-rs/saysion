@@ -107,3 +107,35 @@ async fn redis_expired_write_removes_key_instead_of_persisting_it() {
     assert_eq!(ttl, -1, "sessions without expiry must remain persistent");
     store.clear_store().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore]
+async fn redis_clear_batches_and_preserves_literal_prefix_isolation() {
+    use redis::AsyncCommands;
+
+    let root = format!("saysion-scan-{}/", Session::new().id());
+    let prefix = format!("{root}*?[]\\/");
+    let neighbor = format!("{root}neighbor");
+    let store = RedisStore::from_url(&url())
+        .await
+        .unwrap()
+        .with_prefix(&prefix);
+    let mut conn = redis::Client::open(url())
+        .unwrap()
+        .get_multiplexed_async_connection()
+        .await
+        .unwrap();
+    let mut pipeline = redis::pipe();
+    for index in 0..700 {
+        pipeline.set(format!("{prefix}{index}"), "session").ignore();
+    }
+    pipeline.set(&neighbor, "keep").ignore();
+    let _: () = pipeline.query_async(&mut conn).await.unwrap();
+
+    assert_eq!(store.count().await.unwrap(), 700);
+    store.clear_store().await.unwrap();
+    assert_eq!(store.count().await.unwrap(), 0);
+    let value: String = conn.get(&neighbor).await.unwrap();
+    assert_eq!(value, "keep");
+    let _: usize = conn.del(&neighbor).await.unwrap();
+}
