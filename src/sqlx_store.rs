@@ -45,10 +45,8 @@ fn expiry_unix(session: &Session) -> Option<i64> {
     session.expiry().map(|e| e.unix_timestamp())
 }
 
-fn parse_session(json: &str) -> Option<Session> {
-    serde_json::from_str::<Session>(json)
-        .ok()
-        .and_then(Session::validate)
+fn parse_session(json: &str) -> crate::Result<Option<Session>> {
+    Ok(serde_json::from_str::<Session>(json)?.validate())
 }
 
 // ---------- Postgres ----------
@@ -158,7 +156,9 @@ mod pg {
                 .bind(now_unix())
                 .fetch_optional(&self.pool)
                 .await?;
-            Ok(row.and_then(|(s,)| parse_session(&s)))
+            row.map(|(s,)| parse_session(&s))
+                .transpose()
+                .map(Option::flatten)
         }
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
@@ -298,7 +298,9 @@ mod sqlite {
                 .bind(now_unix())
                 .fetch_optional(&self.pool)
                 .await?;
-            Ok(row.and_then(|(s,)| parse_session(&s)))
+            row.map(|(s,)| parse_session(&s))
+                .transpose()
+                .map(Option::flatten)
         }
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
@@ -445,7 +447,9 @@ mod mysql {
                 .bind(now_unix())
                 .fetch_optional(&self.pool)
                 .await?;
-            Ok(row.and_then(|(s,)| parse_session(&s)))
+            row.map(|(s,)| parse_session(&s))
+                .transpose()
+                .map(Option::flatten)
         }
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
