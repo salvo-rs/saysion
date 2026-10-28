@@ -1,0 +1,28 @@
+name: Dependency security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.0 --locked
+      - name: Resolve the full dependency graph
+        run: cargo generate-lockfile
+      - name: Reject vulnerabilities and dependency warnings
+        run: cargo audit --deny warnings
