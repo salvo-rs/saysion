@@ -144,7 +144,9 @@ let store = saysion::SqlxMySqlStore::from_url("mysql://root:root@127.0.0.1/myapp
 
 ## 运行集成测试
 
-每个后端都附带集成测试,默认带 `#[ignore]` 标记,需要显式开启:
+SQLite 集成测试使用独立的内存数据库，默认自动运行。其他后端测试在本地
+带 `#[ignore]` 标记，CI 会使用真实服务运行。每个测试使用独立的 Redis
+前缀、MongoDB 集合或 SQL 表，可以并行运行：
 
 ```bash
 # Redis
@@ -160,7 +162,7 @@ POSTGRES_URL=postgres://postgres:postgres@127.0.0.1/saysion_test \
     cargo test --features sqlx-postgres -- --ignored
 
 # SQLite(无需外部服务)
-cargo test --features sqlx-sqlite -- --ignored
+cargo test --features sqlx-sqlite --test sqlx_sqlite
 
 # MySQL
 MYSQL_URL=mysql://root:root@127.0.0.1/saysion_test \

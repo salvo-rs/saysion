@@ -5,6 +5,8 @@
 //! default of `redis://127.0.0.1:6379`. All tests are `#[ignore]` —
 //! run with `cargo test --features redis -- --ignored`.
 
+mod common;
+
 use std::time::Duration;
 
 use saysion::{RedisStore, Session, SessionStore};
@@ -17,7 +19,7 @@ async fn fresh_store() -> RedisStore {
     let store = RedisStore::from_url(&url())
         .await
         .expect("connect to redis")
-        .with_prefix("saysion-test/");
+        .with_prefix(format!("saysion-test/{:016x}/", rand::random::<u64>()));
     store.clear_store().await.expect("clear");
     store
 }
@@ -33,6 +35,7 @@ async fn redis_roundtrip() {
 
     let loaded = store.load_session(cookie).await.unwrap().unwrap();
     assert_eq!(loaded.get::<String>("hello").unwrap(), "world");
+    common::assert_contract(&store).await;
 
     store.clear_store().await.unwrap();
 }

@@ -3,10 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches:
-      - main
-      - staging
-      - trying
+    branches: [main, staging, trying]
 
 permissions:
   contents: read
@@ -17,45 +14,87 @@ env:
 
 jobs:
   build_and_test:
-    name: Build and test (${{ matrix.os }})
+    name: Test ${{ matrix.cargo_args || 'default' }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        cargo_args: ['', '--all-features']
+        include:
+          - { os: ubuntu-latest, cargo_args: '--features redis' }
+          - { os: ubuntu-latest, cargo_args: '--features mongodb' }
+          - { os: ubuntu-latest, cargo_args: '--features sqlx' }
+          - { os: ubuntu-latest, cargo_args: '--features sqlx-postgres' }
+          - { os: ubuntu-latest, cargo_args: '--features sqlx-sqlite' }
+          - { os: ubuntu-latest, cargo_args: '--features sqlx-mysql' }
     steps:
       - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Check targets
+        run: cargo check --all-targets ${{ matrix.cargo_args }}
+      - name: Test feature selection
+        run: cargo test ${{ matrix.cargo_args }}
+      - name: Check documentation for feature selection
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --no-deps ${{ matrix.cargo_args }}
 
-      - name: Install Rust 1.95
-        uses: dtolnay/rust-toolchain@1.95.0
-
-      - name: Check all targets and features
-        run: cargo check --all-targets --all-features
-
-      - name: Test all features
-        run: cargo test --all-features
+  backend_contracts:
+    name: Test real storage backends
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      mongodb:
+        image: mongo:8
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: saysion_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d saysion_test"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: saysion_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 10s --health-timeout 5s --health-retries 15
+    env:
+      REDIS_URL: redis://127.0.0.1:6379
+      MONGODB_URL: mongodb://127.0.0.1:27017
+      POSTGRES_URL: postgres://postgres:postgres@127.0.0.1/saysion_test
+      MYSQL_URL: mysql://root:root@127.0.0.1/saysion_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Run storage integration tests including service tests
+        run: cargo test --all-features --tests -- --include-ignored
 
   lint_and_docs:
     name: Lint and documentation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install Rust 1.95
-        uses: dtolnay/rust-toolchain@1.95.0
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: clippy, rustfmt
-
       - name: Check formatting
         run: cargo fmt --all -- --check
-
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Documentation
-        env:
-          RUSTDOCFLAGS: -Dwarnings
-        run: cargo doc --all-features --no-deps
