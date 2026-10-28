@@ -79,6 +79,8 @@ pub struct Session {
     #[serde(skip)]
     cookie_value: Option<String>,
     #[serde(skip)]
+    metadata_changed: AtomicBool,
+    #[serde(skip)]
     destroy: Arc<AtomicBool>,
 }
 
@@ -90,6 +92,7 @@ impl Clone for Session {
             data: self.data.clone(),
             expiry: self.expiry,
             destroy: self.destroy.clone(),
+            metadata_changed: AtomicBool::new(self.metadata_changed.load(Ordering::Acquire)),
         }
     }
 }
@@ -124,6 +127,7 @@ impl Session {
                 ..SessionData::default()
             })),
             cookie_value: None,
+            metadata_changed: AtomicBool::new(false),
             destroy: Arc::new(AtomicBool::new(self.is_destroyed())),
         };
         (snapshot, data.revision)
@@ -132,6 +136,7 @@ impl Session {
     /// Acknowledge only the data represented by a successfully saved snapshot.
     pub(crate) fn acknowledge_revision(&self, revision: u64) {
         self.data.write().unwrap().persisted_revision = revision;
+        self.metadata_changed.store(false, Ordering::Release);
     }
 
     /// Create a new session. Generates a random id and matching
@@ -157,6 +162,7 @@ impl Session {
             expiry: None,
             data: Arc::new(RwLock::new(SessionData::default())),
             cookie_value: Some(cookie_value),
+            metadata_changed: AtomicBool::new(false),
             id,
             destroy: Arc::new(AtomicBool::new(false)),
         }
@@ -404,6 +410,7 @@ impl Session {
         let cookie_value = generate_cookie(64);
         self.id = Session::id_from_cookie_value(&cookie_value).unwrap();
         self.cookie_value = Some(cookie_value);
+        self.metadata_changed.store(true, Ordering::Release);
     }
 
     /// sets the cookie value that this session will use to serialize
@@ -424,7 +431,10 @@ impl Session {
     /// # Ok(()) }
     /// ```
     pub fn set_cookie_value(&mut self, cookie_value: String) {
-        self.cookie_value = Some(cookie_value)
+        if self.cookie_value.as_ref() != Some(&cookie_value) {
+            self.cookie_value = Some(cookie_value);
+            self.metadata_changed.store(true, Ordering::Release);
+        }
     }
 
     /// returns the expiry timestamp of this session, if there is one
@@ -460,7 +470,10 @@ impl Session {
     /// # Ok(()) }
     /// ```
     pub fn set_expiry(&mut self, expiry: DateTime) {
-        self.expiry = Some(expiry);
+        if self.expiry != Some(expiry) {
+            self.expiry = Some(expiry);
+            self.metadata_changed.store(true, Ordering::Release);
+        }
     }
 
     /// assigns the expiry timestamp to a duration from the current time.
@@ -478,7 +491,7 @@ impl Session {
     /// # Ok(()) }
     /// ```
     pub fn expire_in(&mut self, ttl: std::time::Duration) {
-        self.expiry = Some(DateTime::now_utc() + ttl);
+        self.set_expiry(DateTime::now_utc() + ttl);
     }
 
     /// predicate function to determine if this session is
@@ -531,8 +544,12 @@ impl Session {
         if self.is_expired() { None } else { Some(self) }
     }
 
-    /// Checks if the data has been modified. This is based on the
-    /// implementation of [`PartialEq`] for the inner data type.
+    /// Checks whether data, identity, expiry, or the outgoing cookie changed.
+    ///
+    /// Data changes are shared between request-local clones. Identity and expiry
+    /// are copied when cloning, so metadata change tracking is independent for
+    /// each clone. Saving or resetting one clone cannot clear another clone's
+    /// metadata changes. A newly created, untouched session remains unchanged.
     ///
     /// # Example
     ///
@@ -552,11 +569,24 @@ impl Session {
     /// # }
     /// ```
     pub fn data_changed(&self) -> bool {
+        if self.metadata_changed.load(Ordering::Acquire) {
+            return true;
+        }
         let data = self.data.read().unwrap();
         data.revision != data.persisted_revision
     }
 
-    /// Marks the current data as unchanged. Built-in stores instead acknowledge
+    /// Whether this session has changes to save or is marked for destruction.
+    ///
+    /// Middleware must perform deletion when [`Self::is_destroyed`] is true;
+    /// otherwise it can save changed sessions. Untouched new sessions return
+    /// false, preserving middleware that creates sessions only after use.
+    pub fn needs_persist(&self) -> bool {
+        self.data_changed() || self.is_destroyed()
+    }
+
+    /// Marks the current data and this clone's metadata as unchanged.
+    /// Built-in stores instead acknowledge
     /// the exact snapshot they persisted, so edits made during I/O stay dirty.
     /// Custom stores must not call this after asynchronous I/O when clones may
     /// have modified the session in the meantime.
@@ -581,6 +611,7 @@ impl Session {
     pub fn reset_data_changed(&self) {
         let mut data = self.data.write().unwrap();
         data.persisted_revision = data.revision;
+        self.metadata_changed.store(false, Ordering::Release);
     }
 
     /// Duration from now to the expiry time of this session
