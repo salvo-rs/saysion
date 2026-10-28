@@ -88,10 +88,18 @@ impl SessionStore for RedisStore {
         let json = serde_json::to_string(&snapshot)?;
         let mut conn = self.conn.clone();
         if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != id) {
-            let ttl = snapshot
-                .expires_in()
-                .map(|ttl| ttl.as_secs().max(1))
-                .unwrap_or(0);
+            let ttl = match snapshot.expiry() {
+                Some(_) => {
+                    let Some(ttl) = snapshot.expires_in() else {
+                        // Expired rotations revoke the source without creating
+                        // a permanent replacement for an already-expired session.
+                        let _: () = conn.del(self.key(old_id)).await?;
+                        return Ok(None);
+                    };
+                    u64::try_from(ttl.as_nanos().div_ceil(1_000_000))?.max(1)
+                }
+                None => 0,
+            };
             let rotated: i64 = redis::cmd("EVAL")
                 .arg(
                     r#"
@@ -99,7 +107,7 @@ impl SessionStore for RedisStore {
                         return 0
                     end
                     if tonumber(ARGV[2]) > 0 then
-                        redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2])
+                        redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2])
                     else
                         redis.call('SET', KEYS[2], ARGV[1])
                     end
