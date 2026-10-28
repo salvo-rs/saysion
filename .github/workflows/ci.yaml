@@ -65,7 +65,9 @@ jobs:
 
   backend_contracts:
     name: Test real storage backends
-    runs-on: ubuntu-latest
+    # MongoDB 8 fails during service initialization on the current 26.04 kernel.
+    # https://jira.mongodb.org/browse/SERVER-121912
+    runs-on: ubuntu-24.04
     services:
       redis:
         image: redis:7-alpine
