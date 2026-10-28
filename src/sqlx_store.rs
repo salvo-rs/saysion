@@ -163,8 +163,9 @@ mod pg {
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
-            let json = serde_json::to_string(&session)?;
-            let expires = expiry_unix(&session);
+            let (snapshot, revision) = session.persistence_snapshot();
+            let json = serde_json::to_string(&snapshot)?;
+            let expires = expiry_unix(&snapshot);
             let sql = format!(
                 "INSERT INTO {table} (id, expires, session) VALUES ($1, $2, $3) \
                  ON CONFLICT (id) DO UPDATE SET expires = EXCLUDED.expires, session = EXCLUDED.session",
@@ -176,7 +177,7 @@ mod pg {
                 .bind(&json)
                 .execute(&self.pool)
                 .await?;
-            session.reset_data_changed();
+            session.acknowledge_revision(revision);
             Ok(session.into_cookie_value())
         }
 
@@ -305,8 +306,9 @@ mod sqlite {
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
-            let json = serde_json::to_string(&session)?;
-            let expires = expiry_unix(&session);
+            let (snapshot, revision) = session.persistence_snapshot();
+            let json = serde_json::to_string(&snapshot)?;
+            let expires = expiry_unix(&snapshot);
             let sql = format!(
                 "INSERT INTO {table} (id, expires, session) VALUES (?, ?, ?) \
                  ON CONFLICT(id) DO UPDATE SET expires = excluded.expires, session = excluded.session",
@@ -318,7 +320,7 @@ mod sqlite {
                 .bind(&json)
                 .execute(&self.pool)
                 .await?;
-            session.reset_data_changed();
+            session.acknowledge_revision(revision);
             Ok(session.into_cookie_value())
         }
 
@@ -454,8 +456,9 @@ mod mysql {
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
-            let json = serde_json::to_string(&session)?;
-            let expires = expiry_unix(&session);
+            let (snapshot, revision) = session.persistence_snapshot();
+            let json = serde_json::to_string(&snapshot)?;
+            let expires = expiry_unix(&snapshot);
             let sql = format!(
                 "INSERT INTO {table} (id, expires, session) VALUES (?, ?, ?) \
                  ON DUPLICATE KEY UPDATE expires = VALUES(expires), session = VALUES(session)",
@@ -467,7 +470,7 @@ mod mysql {
                 .bind(&json)
                 .execute(&self.pool)
                 .await?;
-            session.reset_data_changed();
+            session.acknowledge_revision(revision);
             Ok(session.into_cookie_value())
         }
 

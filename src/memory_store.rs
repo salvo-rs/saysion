@@ -56,12 +56,13 @@ impl SessionStore for MemoryStore {
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         tracing::debug!("storing session by id `{}`", session.id());
+        let (snapshot, revision) = session.persistence_snapshot();
         self.inner
             .write()
             .await
-            .insert(session.id().to_string(), session.snapshot());
+            .insert(session.id().to_string(), snapshot);
 
-        session.reset_data_changed();
+        session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
     }
 
@@ -132,6 +133,48 @@ impl MemoryStore {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn saving_a_snapshot_does_not_clear_a_later_clone_edit() -> Result {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let store = MemoryStore::new();
+        let mut session = Session::new();
+        session.insert("value", 1)?;
+        let mut editor = session.clone();
+        let blocker = store.inner.write().await;
+        let mut save = std::pin::pin!(store.store_session(session));
+        poll_fn(|cx| match save.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("save completed while the store was blocked: {result:?}"),
+        })
+        .await;
+        editor.insert("value", 2)?;
+        drop(blocker);
+        let cookie = save.await?.unwrap();
+
+        assert!(editor.data_changed());
+        assert_eq!(
+            store
+                .load_session(cookie.clone())
+                .await?
+                .unwrap()
+                .get::<u64>("value"),
+            Some(1)
+        );
+        store.store_session(editor.clone()).await?;
+        assert!(!editor.data_changed());
+        assert_eq!(
+            store
+                .load_session(cookie)
+                .await?
+                .unwrap()
+                .get::<u64>("value"),
+            Some(2)
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn creating_a_new_session_with_no_expiry() -> Result {
