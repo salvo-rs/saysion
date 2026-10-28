@@ -43,7 +43,7 @@ impl SessionStore for MemoryStore {
             .read()
             .await
             .get(&id)
-            .cloned()
+            .map(Session::snapshot)
             .and_then(Session::validate))
     }
 
@@ -52,7 +52,7 @@ impl SessionStore for MemoryStore {
         self.inner
             .write()
             .await
-            .insert(session.id().to_string(), session.clone());
+            .insert(session.id().to_string(), session.snapshot());
 
         session.reset_data_changed();
         Ok(session.into_cookie_value())
