@@ -3,9 +3,9 @@
 //! Three concrete stores are exposed, each gated behind its own
 //! cargo feature:
 //!
-//! - [`SqlxPostgresStore`] (`sqlx-postgres`)
-//! - [`SqlxSqliteStore`]   (`sqlx-sqlite`)
-//! - [`SqlxMySqlStore`]    (`sqlx-mysql`)
+//! - `SqlxPostgresStore` (`sqlx-postgres`)
+//! - `SqlxSqliteStore`   (`sqlx-sqlite`)
+//! - `SqlxMySqlStore`    (`sqlx-mysql`)
 //!
 //! All three use a `sqlx::Pool` internally, so connections are
 //! pooled and reused across tasks. Expiry timestamps are stored as
