@@ -53,10 +53,10 @@ impl SessionStore for MemoryStore {
         let origin = session.persistence_origin()?;
         let (snapshot, revision) = session.persistence_snapshot();
         let mut records = self.inner.write().await;
-        if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != session.id()) {
-            if records.remove(old_id).is_none() {
-                return Err(crate::SessionConflict.into());
-            }
+        if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != session.id())
+            && records.remove(old_id).is_none()
+        {
+            return Err(crate::SessionConflict.into());
         }
         records.insert(session.id().to_string(), snapshot.mark_loaded());
         drop(records);
