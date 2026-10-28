@@ -26,6 +26,11 @@
 
 *Fork from: https://github.com/http-rs/async-session*
 
+## Session stores
+
+Backend setup and feature flags: [English](docs/en/stores.md) |
+[中文](docs/zh/stores.md).
+
 ## Safety
 This crate uses ``#![deny(unsafe_code)]`` to ensure everything is implemented in
 100% Safe Rust.
