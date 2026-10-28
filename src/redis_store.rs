@@ -127,8 +127,14 @@ impl SessionStore for RedisStore {
         }
         let mut command = redis::cmd("SET");
         command.arg(self.key(&id)).arg(&json);
-        if let Some(ttl) = snapshot.expires_in() {
-            command.arg("EX").arg(ttl.as_secs().max(1));
+        let ttl = snapshot.expires_in();
+        if snapshot.expiry().is_some() && ttl.is_none() {
+            let _: () = conn.del(self.key(&id)).await?;
+            return Ok(None);
+        }
+        if let Some(ttl) = ttl {
+            let millis = u64::try_from(ttl.as_nanos().div_ceil(1_000_000))?.max(1);
+            command.arg("PX").arg(millis);
         }
         command.arg(if origin.is_some() { "XX" } else { "NX" });
         let saved: Option<String> = command.query_async(&mut conn).await?;
