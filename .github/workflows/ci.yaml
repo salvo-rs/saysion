@@ -65,7 +65,8 @@ jobs:
 
   backend_contracts:
     name: Test real storage backends
-    # MongoDB 8 fails during service initialization on the current 26.04 kernel.
+    # Keep a stable runner image; MongoDB 8+ cannot start on kernel 6.19+.
+    # MongoDB 7 is supported by the driver and avoids SERVER-121912.
     # https://jira.mongodb.org/browse/SERVER-121912
     runs-on: ubuntu-24.04
     services:
@@ -76,7 +77,7 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 10s --health-timeout 5s --health-retries 10
       mongodb:
-        image: mongo:8
+        image: mongo:7
         ports: ['27017:27017']
         options: >-
           --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
