@@ -24,6 +24,11 @@ struct SessionData {
     persisted_revision: u64,
 }
 
+#[derive(Debug)]
+pub(crate) struct PersistenceAttempt {
+    pub(crate) origin: Option<String>,
+}
+
 /// # The main session type.
 ///
 /// ## Cloning and Serialization
@@ -87,6 +92,8 @@ pub struct Session {
     #[serde(skip)]
     fresh: bool,
     #[serde(skip)]
+    creation_claimed: Arc<AtomicBool>,
+    #[serde(skip)]
     destroy: Arc<AtomicBool>,
 }
 
@@ -102,6 +109,7 @@ impl Clone for Session {
             persisted_id: self.persisted_id.clone(),
             rotation_from: self.rotation_from.clone(),
             fresh: self.fresh,
+            creation_claimed: self.creation_claimed.clone(),
         }
     }
 }
@@ -140,6 +148,7 @@ impl Session {
             persisted_id: Arc::new(RwLock::new(None)),
             rotation_from: None,
             fresh: false,
+            creation_claimed: Arc::default(),
             destroy: Arc::new(AtomicBool::new(self.is_destroyed())),
         };
         (snapshot, data.revision)
@@ -153,7 +162,7 @@ impl Session {
 
     pub(crate) fn persistence_origin(&self) -> crate::Result<Option<String>> {
         let origin = self.persisted_id.read().unwrap().clone();
-        if origin.is_none() && !self.fresh {
+        if origin.is_none() && (!self.fresh || self.creation_claimed.load(Ordering::Acquire)) {
             return Err(crate::SessionConflict.into());
         }
         if let Some(id) = origin.as_deref()
@@ -171,6 +180,24 @@ impl Session {
         if origin.is_none() || self.rotation_from.as_deref() == origin.as_deref() {
             *origin = Some(self.id.clone());
         }
+    }
+
+    pub(crate) fn persistence_attempt(&self) -> crate::Result<PersistenceAttempt> {
+        if self.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
+        let attempt = PersistenceAttempt {
+            origin: self.persistence_origin()?,
+        };
+        if attempt.origin.is_none() {
+            self.creation_claimed
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .map_err(|_| crate::SessionConflict)?;
+            // Never return creation authority after starting a write: a failed
+            // or cancelled network future may already have created the record.
+            // Only a confirmed successful save publishes a persisted identity.
+        }
+        Ok(attempt)
     }
 
     pub(crate) fn mark_loaded(self) -> Self {
@@ -205,6 +232,7 @@ impl Session {
             persisted_id: Arc::new(RwLock::new(None)),
             rotation_from: None,
             fresh: true,
+            creation_claimed: Arc::default(),
             id,
             destroy: Arc::new(AtomicBool::new(false)),
         }
@@ -710,5 +738,36 @@ impl Session {
 impl PartialEq for Session {
     fn eq(&self, other: &Self) -> bool {
         other.id == self.id
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn creation_authority_is_consumed_even_after_failure_or_cancellation() {
+        let session = Session::new();
+        let clone = session.clone();
+        let _attempt = session.persistence_attempt().unwrap();
+        assert!(clone.persistence_attempt().is_err());
+        assert!(session.persistence_origin().is_err());
+        assert!(clone.persistence_origin().is_err());
+    }
+
+    #[test]
+    fn a_late_update_completion_cannot_roll_back_a_rotated_marker() {
+        let mut session = Session::new().mark_loaded();
+        let mut old = session.clone();
+        session.regenerate();
+        session.mark_persisted();
+        old.mark_persisted();
+        assert_eq!(
+            session.persistence_origin().unwrap().as_deref(),
+            Some(session.id())
+        );
+        assert!(old.persistence_origin().is_err());
+        old.regenerate();
+        assert!(old.persistence_origin().is_err());
     }
 }

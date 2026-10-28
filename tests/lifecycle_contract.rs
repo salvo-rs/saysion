@@ -35,8 +35,14 @@ async fn rotation_contract(store: &impl SessionStore) -> saysion::Result {
         Some(42)
     );
     // An unchanged save must succeed, including MySQL matched-row semantics.
-    let loaded = store.load_session(new_cookie).await?.unwrap();
+    let loaded = store.load_session(new_cookie.clone()).await?.unwrap();
     store.store_session(loaded).await?;
+    let late = store.load_session(new_cookie.clone()).await?.unwrap();
+    let logout = store.load_session(new_cookie.clone()).await?.unwrap();
+    store.destroy_session(logout).await?;
+    let error = store.store_session(late).await.unwrap_err();
+    assert!(error.downcast_ref::<saysion::SessionConflict>().is_some());
+    assert!(store.load_session(new_cookie).await?.is_none());
     store.clear_store().await?;
     Ok(())
 }

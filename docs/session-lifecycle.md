@@ -27,3 +27,15 @@ These guarantees concern a particular persisted ID. Revoking every descendant
 of an already completed rotation, or all sessions belonging to an account,
 requires application-level account/session generations or a stable session
 family. Client-side cookie stores have no server-side revocation state.
+
+Loaded server-side sessions are updated only while their record still exists.
+Saving an independent request after logout or clear returns `SessionConflict`
+and cannot recreate that ID. Only a fresh `Session::new()` can create a record;
+request-local clones share the knowledge that their first save has completed.
+Concurrent first saves of the same fresh session are rejected. Creation authority
+is consumed when the first save starts: a failed or cancelled network future
+may already have written the record. If the outcome is uncertain, load through
+the store using its cookie, or create a fresh session after authentication;
+never retry the old object as a fresh insertion. A confirmed successful save
+allows its clones to perform conditional updates.
+Deleting a session after an unsaved regeneration targets its persisted source.

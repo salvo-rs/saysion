@@ -1,0 +1,57 @@
+name: Session lifecycle
+
+on:
+  pull_request:
+    paths: ['src/**', 'tests/lifecycle_contract.rs', '.github/workflows/lifecycle.yaml', 'Cargo.toml']
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-24.04
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      mongodb:
+        # MongoDB 8 is incompatible with Linux 6.19+ (SERVER-121912).
+        image: mongo:7
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: saysion_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d saysion_test"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: saysion_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 10s --health-timeout 5s --health-retries 15
+    env:
+      REDIS_URL: redis://127.0.0.1:6379
+      MONGODB_URL: mongodb://127.0.0.1:27017
+      POSTGRES_URL: postgres://postgres:postgres@127.0.0.1/saysion_test
+      MYSQL_URL: mysql://root:root@127.0.0.1/saysion_test
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Verify rotation and revocation against real backends
+        run: cargo test --all-features --test lifecycle_contract -- --ignored

@@ -95,7 +95,11 @@ impl SessionStore for MongoDbStore {
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let id = session.id().to_string();
         tracing::debug!("storing session by id `{}`", id);
-        let origin = session.persistence_origin()?;
+        let attempt = session.persistence_attempt()?;
+        let origin = attempt.origin.clone();
+        if session.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
         let (snapshot, revision) = session.persistence_snapshot();
         let json = serde_json::to_string(&snapshot)?;
         let expires_at = snapshot
@@ -120,19 +124,32 @@ impl SessionStore for MongoDbStore {
             }
             self.coll().insert_one(&doc_value).await?;
         } else {
-            self.coll()
-                .replace_one(doc! { "_id": &id }, &doc_value)
-                .upsert(true)
-                .await?;
+            if origin.is_some() {
+                let result = self
+                    .coll()
+                    .replace_one(doc! { "_id": &id }, &doc_value)
+                    .await?;
+                if result.matched_count != 1 {
+                    return Err(crate::SessionConflict.into());
+                }
+            } else {
+                self.coll().insert_one(&doc_value).await?;
+            }
         }
         session.mark_persisted();
         session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
     }
 
-    async fn destroy_session(&self, session: Session) -> Result {
+    async fn destroy_session(&self, mut session: Session) -> Result {
         tracing::debug!("destroying session by id `{}`", session.id());
-        self.coll().delete_one(doc! { "_id": session.id() }).await?;
+        let origin = session
+            .persistence_origin()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| session.id().to_owned());
+        session.destroy();
+        self.coll().delete_one(doc! { "_id": origin }).await?;
         Ok(())
     }
 

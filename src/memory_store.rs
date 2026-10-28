@@ -50,13 +50,29 @@ impl SessionStore for MemoryStore {
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         tracing::debug!("storing session by id `{}`", session.id());
-        let origin = session.persistence_origin()?;
+        let attempt = session.persistence_attempt()?;
         let (snapshot, revision) = session.persistence_snapshot();
         let mut records = self.inner.write().await;
-        if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != session.id()) {
-            if records.remove(old_id).is_none() {
-                return Err(crate::SessionConflict.into());
-            }
+        let origin = if attempt.origin.is_none() {
+            None
+        } else {
+            session.persistence_origin()?
+        };
+        if session.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
+        if let Some(source) = origin.as_ref()
+            && !records.contains_key(source)
+        {
+            return Err(crate::SessionConflict.into());
+        }
+        if origin.as_deref() != Some(session.id()) && records.contains_key(session.id()) {
+            return Err(crate::SessionConflict.into());
+        }
+        if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != session.id())
+            && records.remove(old_id).is_none()
+        {
+            return Err(crate::SessionConflict.into());
         }
         records.insert(session.id().to_string(), snapshot.mark_loaded());
         drop(records);
@@ -66,9 +82,15 @@ impl SessionStore for MemoryStore {
         Ok(session.into_cookie_value())
     }
 
-    async fn destroy_session(&self, session: Session) -> Result {
+    async fn destroy_session(&self, mut session: Session) -> Result {
         tracing::debug!("destroying session by id `{}`", session.id());
-        self.inner.write().await.remove(session.id());
+        let origin = session
+            .persistence_origin()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| session.id().to_owned());
+        session.destroy();
+        self.inner.write().await.remove(&origin);
         Ok(())
     }
 

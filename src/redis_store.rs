@@ -83,7 +83,11 @@ impl SessionStore for RedisStore {
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let id = session.id().to_string();
         tracing::debug!("storing session by id `{}`", id);
-        let origin = session.persistence_origin()?;
+        let attempt = session.persistence_attempt()?;
+        let origin = attempt.origin.clone();
+        if session.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
         let (snapshot, revision) = session.persistence_snapshot();
         let json = serde_json::to_string(&snapshot)?;
         let mut conn = self.conn.clone();
@@ -121,25 +125,31 @@ impl SessionStore for RedisStore {
             session.acknowledge_revision(revision);
             return Ok(session.into_cookie_value());
         }
-        match snapshot.expires_in() {
-            Some(ttl) => {
-                let _: () = conn
-                    .set_ex(self.key(&id), json, ttl.as_secs().max(1))
-                    .await?;
-            }
-            None => {
-                let _: () = conn.set(self.key(&id), json).await?;
-            }
+        let mut command = redis::cmd("SET");
+        command.arg(self.key(&id)).arg(&json);
+        if let Some(ttl) = snapshot.expires_in() {
+            command.arg("EX").arg(ttl.as_secs().max(1));
+        }
+        command.arg(if origin.is_some() { "XX" } else { "NX" });
+        let saved: Option<String> = command.query_async(&mut conn).await?;
+        if saved.is_none() {
+            return Err(crate::SessionConflict.into());
         }
         session.mark_persisted();
         session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
     }
 
-    async fn destroy_session(&self, session: Session) -> Result {
+    async fn destroy_session(&self, mut session: Session) -> Result {
         tracing::debug!("destroying session by id `{}`", session.id());
+        let origin = session
+            .persistence_origin()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| session.id().to_owned());
+        session.destroy();
         let mut conn = self.conn.clone();
-        let _: () = conn.del(self.key(session.id())).await?;
+        let _: () = conn.del(self.key(&origin)).await?;
         Ok(())
     }
 
