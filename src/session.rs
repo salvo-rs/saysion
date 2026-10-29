@@ -57,7 +57,7 @@ use time::OffsetDateTime as DateTime;
 /// assert!(session.data_changed());
 /// # Ok(()) }
 /// ```
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct Session {
     id: String,
     expiry: Option<DateTime>,
@@ -69,6 +69,17 @@ pub struct Session {
     data_changed: Arc<AtomicBool>,
     #[serde(skip)]
     destroy: Arc<AtomicBool>,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Avoid both secrets and data locks: formatting can happen while an
+        // application holds a session lock or handles a poisoned lock.
+        f.debug_struct("Session")
+            .field("expiry", &self.expiry())
+            .field("destroyed", &self.is_destroyed())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Clone for Session {

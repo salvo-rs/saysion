@@ -28,9 +28,16 @@ use crate::{Result, Session, SessionStore, async_trait};
 /// - [async-redis-session](https://crates.io/crates/async-redis-session)
 /// - [async-mongodb-session](https://crates.io/crates/async-mongodb-session)
 ///
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Clone)]
 pub struct MemoryStore {
     inner: Arc<RwLock<HashMap<String, Session>>>,
+}
+
+impl std::fmt::Debug for MemoryStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Do not traverse sessions or acquire the store lock for diagnostics.
+        f.debug_struct("MemoryStore").finish_non_exhaustive()
+    }
 }
 
 #[async_trait]
