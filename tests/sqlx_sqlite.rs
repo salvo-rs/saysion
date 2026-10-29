@@ -1,45 +1,24 @@
 #![cfg(feature = "sqlx-sqlite")]
 //! Integration tests for `SqlxSqliteStore`.
 //!
-//! Uses a temporary on-disk SQLite database. Run with
-//! `cargo test --features sqlx-sqlite -- --ignored`.
+//! Uses an isolated in-memory database per test and runs without services:
+//! `cargo test --features sqlx-sqlite --test sqlx_sqlite`.
+
+mod common;
 
 use std::time::Duration;
 
 use saysion::{Session, SessionStore, SqlxSqliteStore};
 
-async fn fresh_store() -> (SqlxSqliteStore, tempfile_path::TempDb) {
-    let temp = tempfile_path::TempDb::new();
-    let store = SqlxSqliteStore::from_url(&temp.url())
+async fn fresh_store() -> SqlxSqliteStore {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
         .await
         .expect("connect to sqlite");
+    let store = SqlxSqliteStore::new(pool);
     store.migrate().await.expect("migrate");
-    (store, temp)
-}
-
-mod tempfile_path {
-    pub struct TempDb {
-        path: std::path::PathBuf,
-    }
-    impl TempDb {
-        pub fn new() -> Self {
-            let mut p = std::env::temp_dir();
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            p.push(format!("saysion-test-{nanos}.sqlite"));
-            Self { path: p }
-        }
-        pub fn url(&self) -> String {
-            format!("sqlite://{}?mode=rwc", self.path.display())
-        }
-    }
-    impl Drop for TempDb {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
+    store
 }
 
 #[tokio::test]
@@ -67,9 +46,8 @@ async fn sqlite_corrupt_session_is_an_error() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn sqlite_roundtrip() {
-    let (store, _g) = fresh_store().await;
+    let store = fresh_store().await;
 
     let mut session = Session::new();
     session.insert("hello", "world").unwrap();
@@ -77,12 +55,12 @@ async fn sqlite_roundtrip() {
 
     let loaded = store.load_session(cookie).await.unwrap().unwrap();
     assert_eq!(loaded.get::<String>("hello").unwrap(), "world");
+    common::assert_contract(&store).await;
 }
 
 #[tokio::test]
-#[ignore]
 async fn sqlite_expiry_and_cleanup() {
-    let (store, _g) = fresh_store().await;
+    let store = fresh_store().await;
 
     let mut session = Session::new();
     session.expire_in(Duration::from_secs(1));
@@ -97,9 +75,8 @@ async fn sqlite_expiry_and_cleanup() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn sqlite_destroy_and_clear() {
-    let (store, _g) = fresh_store().await;
+    let store = fresh_store().await;
 
     for _ in 0..3 {
         store.store_session(Session::new()).await.unwrap();

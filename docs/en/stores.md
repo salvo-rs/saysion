@@ -150,8 +150,10 @@ just clone into your application state.
 
 ## Running integration tests
 
-The crate ships integration tests for every backend. They are marked
-`#[ignore]` so they will not run unless you opt in:
+SQLite integration tests run automatically using isolated in-memory databases.
+The service-backed tests are marked `#[ignore]` for local development; CI runs
+all of them against real services. Each test has its own Redis prefix, MongoDB
+collection, or SQL table, so tests can run in parallel:
 
 ```bash
 # Redis
@@ -166,8 +168,8 @@ MONGODB_URL=mongodb://127.0.0.1:27017 \
 POSTGRES_URL=postgres://postgres:postgres@127.0.0.1/saysion_test \
     cargo test --features sqlx-postgres -- --ignored
 
-# SQLite (no service required)
-cargo test --features sqlx-sqlite -- --ignored
+# SQLite (runs automatically; no service required)
+cargo test --features sqlx-sqlite --test sqlx_sqlite
 
 # MySQL
 MYSQL_URL=mysql://root:root@127.0.0.1/saysion_test \
