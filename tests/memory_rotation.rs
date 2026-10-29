@@ -1,6 +1,46 @@
 use saysion::{MemoryStore, Session, SessionConflict, SessionStore};
 
 #[tokio::test]
+async fn an_independently_loaded_request_cannot_restore_the_rotated_identity() -> saysion::Result {
+    let store = MemoryStore::new();
+    let old_cookie = store.store_session(Session::new()).await?.unwrap();
+    let mut stale = store.load_session(old_cookie.clone()).await?.unwrap();
+    let mut rotating = store.load_session(old_cookie.clone()).await?.unwrap();
+    rotating.regenerate();
+    rotating.insert("user_id", 42)?;
+    let new_cookie = store.store_session(rotating).await?.unwrap();
+
+    stale.insert("late", true)?;
+    let error = store.store_session(stale.clone()).await.unwrap_err();
+    assert!(error.downcast_ref::<SessionConflict>().is_some());
+    assert!(stale.data_changed());
+    assert!(store.load_session(old_cookie).await?.is_none());
+    assert_eq!(
+        store
+            .load_session(new_cookie)
+            .await?
+            .unwrap()
+            .get::<u64>("user_id"),
+        Some(42)
+    );
+    assert_eq!(store.count().await, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn destroying_an_unsaved_rotation_targets_its_persisted_source() -> saysion::Result {
+    let store = MemoryStore::new();
+    let old_cookie = store.store_session(Session::new()).await?.unwrap();
+    let mut rotating = store.load_session(old_cookie.clone()).await?.unwrap();
+    rotating.regenerate();
+    rotating.destroy();
+    store.destroy_session(rotating).await?;
+    assert!(store.load_session(old_cookie).await?.is_none());
+    assert_eq!(store.count().await, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn login_rotation_revokes_old_cookie_and_keeps_new_identity() -> saysion::Result {
     let store = MemoryStore::new();
     let old_cookie = store.store_session(Session::new()).await?.unwrap();
