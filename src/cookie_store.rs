@@ -39,8 +39,11 @@ impl SessionStore for CookieStore {
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
-        let serialized = postcard::to_stdvec(&session)?;
-        Ok(Some(BASE64_STANDARD.encode(serialized)))
+        let (snapshot, revision) = session.persistence_snapshot();
+        let serialized = postcard::to_stdvec(&snapshot)?;
+        let cookie = BASE64_STANDARD.encode(serialized);
+        session.acknowledge_revision(revision);
+        Ok(Some(cookie))
     }
 
     async fn destroy_session(&self, _session: Session) -> Result {

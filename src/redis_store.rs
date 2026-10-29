@@ -118,11 +118,12 @@ impl SessionStore for RedisStore {
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let id = session.id().to_string();
         tracing::debug!("storing session by id `{}`", id);
-        let json = serde_json::to_string(&session)?;
+        let (snapshot, revision) = session.persistence_snapshot();
+        let json = serde_json::to_string(&snapshot)?;
         let mut conn = self.conn.clone();
-        match session.expiry() {
+        match snapshot.expiry() {
             Some(_) => {
-                let Some(ttl) = session.expires_in() else {
+                let Some(ttl) = snapshot.expires_in() else {
                     // An expired timestamp is distinct from no expiry. Never
                     // replace a finite TTL with a permanent Redis key.
                     let _: () = conn.del(self.key(&id)).await?;
@@ -134,7 +135,7 @@ impl SessionStore for RedisStore {
                 let _: () = conn.set(self.key(&id), json).await?;
             }
         }
-        session.reset_data_changed();
+        session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
     }
 

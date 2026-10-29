@@ -91,3 +91,65 @@ async fn sqlite_destroy_and_clear() {
     store.clear_store().await.unwrap();
     assert_eq!(store.count().await.unwrap(), 0);
 }
+#[tokio::test]
+async fn sqlite_save_only_acknowledges_the_snapshot_written_before_io() -> saysion::Result {
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    let store = SqlxSqliteStore::new(pool.clone());
+    store.migrate().await?;
+
+    let mut session = Session::new();
+    session.insert("value", 1)?;
+    let mut editor = session.clone();
+    // Occupy the only connection, then poll the save until it waits for I/O.
+    // No sleeps or scheduler timing assumptions are needed.
+    let blocker = pool.acquire().await?;
+    let mut save = std::pin::pin!(store.store_session(session));
+    poll_fn(|cx| match save.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(result) => panic!("save completed while the pool was blocked: {result:?}"),
+    })
+    .await;
+    editor.insert("value", 2)?;
+    drop(blocker);
+    let cookie = save.await?.unwrap();
+
+    assert!(editor.data_changed(), "the later edit was not persisted");
+    assert_eq!(
+        store
+            .load_session(cookie.clone())
+            .await?
+            .unwrap()
+            .get::<u64>("value"),
+        Some(1)
+    );
+    store.store_session(editor.clone()).await?;
+    assert!(!editor.data_changed());
+    assert_eq!(
+        store
+            .load_session(cookie)
+            .await?
+            .unwrap()
+            .get::<u64>("value"),
+        Some(2)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_failed_save_keeps_changes_pending() -> saysion::Result {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
+    let store = SqlxSqliteStore::new(pool);
+    let mut session = Session::new();
+    session.insert("value", 1)?;
+    let observer = session.clone();
+    // No migration: the write must fail because the table does not exist.
+    assert!(store.store_session(session).await.is_err());
+    assert!(observer.data_changed());
+    Ok(())
+}
