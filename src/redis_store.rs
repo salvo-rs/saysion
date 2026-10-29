@@ -8,6 +8,23 @@ use redis::{AsyncCommands, Client};
 use crate::{Result, Session, SessionStore, async_trait};
 
 const DEFAULT_PREFIX: &str = "saysion/";
+const SCAN_BATCH_SIZE: usize = 256;
+
+fn prefix_pattern(prefix: &str) -> String {
+    let mut pattern = String::with_capacity(prefix.len() + 1);
+    for character in prefix.chars() {
+        if matches!(character, '*' | '?' | '[' | ']' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(character);
+    }
+    pattern.push('*');
+    pattern
+}
+
+fn ttl_millis(ttl: std::time::Duration) -> Result<u64> {
+    Ok(u64::try_from(ttl.as_nanos().div_ceil(1_000_000))?.max(1))
+}
 
 /// A session store backed by Redis.
 ///
@@ -54,14 +71,34 @@ impl RedisStore {
         format!("{}{}", self.prefix, id)
     }
 
-    /// Returns the number of stored sessions matching this store's
-    /// prefix. Uses `KEYS` and is intended for tests / small
-    /// deployments only.
+    /// Count sessions using incremental `SCAN` calls.
+    ///
+    /// The prefix is matched literally, including Redis glob characters.
+    /// The count is an estimate while keys are concurrently modified, since
+    /// `SCAN` can return duplicates or omit keys added during iteration.
     pub async fn count(&self) -> Result<usize> {
         let mut conn = self.conn.clone();
-        let pattern = format!("{}*", self.prefix);
-        let keys: Vec<String> = conn.keys(pattern).await?;
-        Ok(keys.len())
+        let pattern = prefix_pattern(&self.prefix);
+        let mut cursor = 0;
+        let mut total = 0;
+        loop {
+            let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(SCAN_BATCH_SIZE)
+                .query_async(&mut conn)
+                .await?;
+            total += keys
+                .iter()
+                .filter(|key| key.starts_with(&self.prefix))
+                .count();
+            cursor = next;
+            if cursor == 0 {
+                return Ok(total);
+            }
+        }
     }
 }
 
@@ -84,11 +121,15 @@ impl SessionStore for RedisStore {
         let (snapshot, revision) = session.persistence_snapshot();
         let json = serde_json::to_string(&snapshot)?;
         let mut conn = self.conn.clone();
-        match snapshot.expires_in() {
-            Some(ttl) => {
-                let _: () = conn
-                    .set_ex(self.key(&id), json, ttl.as_secs().max(1))
-                    .await?;
+        match snapshot.expiry() {
+            Some(_) => {
+                let Some(ttl) = snapshot.expires_in() else {
+                    // An expired timestamp is distinct from no expiry. Never
+                    // replace a finite TTL with a permanent Redis key.
+                    let _: () = conn.del(self.key(&id)).await?;
+                    return Ok(None);
+                };
+                let _: () = conn.pset_ex(self.key(&id), json, ttl_millis(ttl)?).await?;
             }
             None => {
                 let _: () = conn.set(self.key(&id), json).await?;
@@ -105,14 +146,58 @@ impl SessionStore for RedisStore {
         Ok(())
     }
 
+    /// Clear this prefix using incremental scans and bounded `UNLINK` batches.
+    ///
+    /// Requires Redis 4 or later. This operation is not atomic: writes made
+    /// during the scan may survive or be removed. Quiesce writers if a complete
+    /// clear is required. An empty prefix intentionally matches the whole DB.
     async fn clear_store(&self) -> Result {
         tracing::debug!("clearing redis store with prefix `{}`", self.prefix);
         let mut conn = self.conn.clone();
-        let pattern = format!("{}*", self.prefix);
-        let keys: Vec<String> = conn.keys(pattern).await?;
-        if !keys.is_empty() {
-            let _: () = conn.del(keys).await?;
+        let pattern = prefix_pattern(&self.prefix);
+        let mut cursor = 0;
+        loop {
+            let (next, mut keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(SCAN_BATCH_SIZE)
+                .query_async(&mut conn)
+                .await?;
+            keys.retain(|key| key.starts_with(&self.prefix));
+            // COUNT is a scan hint, not a strict response-size guarantee.
+            for batch in keys.chunks(SCAN_BATCH_SIZE) {
+                let _: usize = redis::cmd("UNLINK")
+                    .arg(batch)
+                    .query_async(&mut conn)
+                    .await?;
+            }
+            cursor = next;
+            if cursor == 0 {
+                return Ok(());
+            }
         }
-        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn redis_ttl_rounds_up_to_milliseconds() {
+        assert_eq!(ttl_millis(Duration::ZERO).unwrap(), 1);
+        assert_eq!(ttl_millis(Duration::from_nanos(1)).unwrap(), 1);
+        assert_eq!(ttl_millis(Duration::from_micros(1_001)).unwrap(), 2);
+        assert_eq!(ttl_millis(Duration::from_millis(1_999)).unwrap(), 1_999);
+    }
+
+    #[test]
+    fn scan_prefix_escapes_glob_metacharacters() {
+        assert_eq!(prefix_pattern(r"app*?[]\/"), r"app\*\?\[\]\\/*");
+        assert_eq!(prefix_pattern("plain/"), "plain/*");
+        assert_eq!(prefix_pattern(""), "*");
     }
 }
