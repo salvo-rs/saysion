@@ -78,3 +78,35 @@ async fn redis_destroy_and_clear() {
     store.clear_store().await.unwrap();
     assert_eq!(store.count().await.unwrap(), 0);
 }
+
+#[tokio::test]
+#[ignore]
+async fn redis_expired_write_removes_key_instead_of_persisting_it() {
+    use redis::AsyncCommands;
+
+    let prefix = format!("saysion-expired-{}/", Session::new().id());
+    let store = RedisStore::from_url(&url())
+        .await
+        .unwrap()
+        .with_prefix(&prefix);
+    let mut session = Session::new();
+    let key = format!("{}{}", prefix, session.id());
+    store.store_session(session.clone()).await.unwrap();
+
+    session.set_expiry(saysion::time::OffsetDateTime::now_utc() - Duration::from_secs(1));
+    assert!(store.store_session(session).await.unwrap().is_none());
+    let mut conn = redis::Client::open(url())
+        .unwrap()
+        .get_multiplexed_async_connection()
+        .await
+        .unwrap();
+    let exists: bool = conn.exists(&key).await.unwrap();
+    assert!(!exists);
+
+    let permanent = Session::new();
+    let permanent_key = format!("{}{}", prefix, permanent.id());
+    store.store_session(permanent).await.unwrap();
+    let ttl: i64 = conn.pttl(&permanent_key).await.unwrap();
+    assert_eq!(ttl, -1, "sessions without expiry must remain persistent");
+    store.clear_store().await.unwrap();
+}
