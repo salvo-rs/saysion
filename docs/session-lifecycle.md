@@ -27,3 +27,10 @@ These guarantees concern a particular persisted ID. Revoking every descendant
 of an already completed rotation, or all sessions belonging to an account,
 requires application-level account/session generations or a stable session
 family. Client-side cookie stores have no server-side revocation state.
+
+Saving a loaded session updates only an existing record. If another request has
+already rotated or removed that identity, the stale save returns
+`SessionConflict` instead of recreating the old ID. Discard the stale session;
+do not copy its authentication data into a fresh session to retry. Only fresh
+sessions use insertion, and insertion cannot overwrite a colliding identity.
+Deleting a session after an unsaved regeneration targets its persisted source.

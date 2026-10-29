@@ -21,10 +21,14 @@ async fn rotation_contract(store: &impl SessionStore) -> saysion::Result {
     let mut session = Session::new();
     session.insert("user_id", 42)?;
     let old_cookie = store.store_session(session).await?.unwrap();
+    let mut stale = store.load_session(old_cookie.clone()).await?.unwrap();
     let mut rotating = store.load_session(old_cookie.clone()).await?.unwrap();
     rotating.regenerate();
     rotating.regenerate();
     let new_cookie = store.store_session(rotating).await?.unwrap();
+    stale.insert("late_update", true)?;
+    let error = store.store_session(stale).await.unwrap_err();
+    assert!(error.downcast_ref::<saysion::SessionConflict>().is_some());
     assert!(store.load_session(old_cookie).await?.is_none());
     assert_eq!(
         store
@@ -35,8 +39,13 @@ async fn rotation_contract(store: &impl SessionStore) -> saysion::Result {
         Some(42)
     );
     // An unchanged save must succeed, including MySQL matched-row semantics.
-    let loaded = store.load_session(new_cookie).await?.unwrap();
+    let loaded = store.load_session(new_cookie.clone()).await?.unwrap();
     store.store_session(loaded).await?;
+    let mut rotating = store.load_session(new_cookie.clone()).await?.unwrap();
+    rotating.regenerate();
+    rotating.destroy();
+    store.destroy_session(rotating).await?;
+    assert!(store.load_session(new_cookie).await?.is_none());
     store.clear_store().await?;
     Ok(())
 }

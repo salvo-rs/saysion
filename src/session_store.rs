@@ -28,6 +28,11 @@ pub trait SessionStore {
     ///
     /// The return value is the value of the cookie to store for the
     /// user that represents this session
+    ///
+    /// Built-in server-side stores create records only for fresh sessions and
+    /// update existing records for loaded sessions. A removed or superseded
+    /// record returns [`SessionConflict`]; discard it instead of recreating its
+    /// authentication data. Client-side stores have no revocation state.
     async fn store_session(&self, session: Session) -> Result<Option<String>>;
 
     /// Remove a session from the session store
