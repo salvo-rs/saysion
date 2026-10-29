@@ -581,9 +581,8 @@ impl Session {
         self.set_expiry(DateTime::now_utc() + ttl);
     }
 
-    /// predicate function to determine if this session is
-    /// expired. returns false if there is no expiry set, or if it is
-    /// in the past.
+    /// Returns true when the expiry timestamp is in the past, and false
+    /// when no expiry is set.
     ///
     /// # Example
     ///
