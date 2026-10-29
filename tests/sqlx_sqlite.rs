@@ -43,6 +43,30 @@ mod tempfile_path {
 }
 
 #[tokio::test]
+async fn sqlite_corrupt_session_is_an_error() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    let store = SqlxSqliteStore::new(pool.clone());
+    store.migrate().await.unwrap();
+    let cookie = store.store_session(Session::new()).await.unwrap().unwrap();
+    let id = Session::id_from_cookie_value(&cookie).unwrap();
+    sqlx::query("UPDATE saysion_sessions SET session = ? WHERE id = ?")
+        .bind("invalid JSON")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let error = store.load_session(cookie).await.unwrap_err();
+    assert!(error.downcast_ref::<serde_json::Error>().is_some());
+    let missing = Session::new().into_cookie_value().unwrap();
+    assert!(store.load_session(missing).await.unwrap().is_none());
+}
+
+#[tokio::test]
 #[ignore]
 async fn sqlite_roundtrip() {
     let (store, _g) = fresh_store().await;
