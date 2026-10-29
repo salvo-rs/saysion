@@ -111,38 +111,95 @@ impl SessionStore for RedisStore {
         let value: Option<String> = conn.get(self.key(&id)).await?;
         Ok(match value {
             None => None,
-            Some(v) => serde_json::from_str::<Session>(&v)?.validate(),
+            Some(v) => serde_json::from_str::<Session>(&v)?
+                .validate()
+                .map(Session::mark_loaded),
         })
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let id = session.id().to_string();
         tracing::debug!("storing session by id `{}`", id);
+        let origin = session.persistence_origin()?;
+        if session.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
         let (snapshot, revision) = session.persistence_snapshot();
         let json = serde_json::to_string(&snapshot)?;
         let mut conn = self.conn.clone();
-        match snapshot.expiry() {
-            Some(_) => {
-                let Some(ttl) = snapshot.expires_in() else {
-                    // An expired timestamp is distinct from no expiry. Never
-                    // replace a finite TTL with a permanent Redis key.
-                    let _: () = conn.del(self.key(&id)).await?;
-                    return Ok(None);
-                };
-                let _: () = conn.pset_ex(self.key(&id), json, ttl_millis(ttl)?).await?;
+        if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != id) {
+            let ttl = match snapshot.expiry() {
+                Some(_) => {
+                    let Some(ttl) = snapshot.expires_in() else {
+                        // Expired rotations revoke the source without creating
+                        // a permanent replacement for an already-expired session.
+                        let _: () = conn.del(self.key(old_id)).await?;
+                        return Ok(None);
+                    };
+                    ttl_millis(ttl)?
+                }
+                None => 0,
+            };
+            let rotated: i64 = redis::cmd("EVAL")
+                .arg(
+                    r#"
+                    if redis.call('EXISTS', KEYS[1]) == 0 or redis.call('EXISTS', KEYS[2]) == 1 then
+                        return 0
+                    end
+                    if tonumber(ARGV[2]) > 0 then
+                        redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2])
+                    else
+                        redis.call('SET', KEYS[2], ARGV[1])
+                    end
+                    redis.call('DEL', KEYS[1])
+                    return 1
+                "#,
+                )
+                .arg(2)
+                .arg(self.key(old_id))
+                .arg(self.key(&id))
+                .arg(&json)
+                .arg(ttl)
+                .query_async(&mut conn)
+                .await?;
+            if rotated == 0 {
+                return Err(crate::SessionConflict.into());
             }
-            None => {
-                let _: () = conn.set(self.key(&id), json).await?;
-            }
+            session.mark_persisted();
+            session.acknowledge_revision(revision);
+            return Ok(session.into_cookie_value());
         }
+        let mut command = redis::cmd("SET");
+        command.arg(self.key(&id)).arg(&json);
+        let ttl = snapshot.expires_in();
+        if snapshot.expiry().is_some() && ttl.is_none() {
+            let _: () = conn.del(self.key(&id)).await?;
+            return Ok(None);
+        }
+        if let Some(ttl) = ttl {
+            let millis = ttl_millis(ttl)?;
+            command.arg("PX").arg(millis);
+        }
+        command.arg(if origin.is_some() { "XX" } else { "NX" });
+        let saved: Option<String> = command.query_async(&mut conn).await?;
+        if saved.is_none() {
+            return Err(crate::SessionConflict.into());
+        }
+        session.mark_persisted();
         session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
     }
 
-    async fn destroy_session(&self, session: Session) -> Result {
+    async fn destroy_session(&self, mut session: Session) -> Result {
         tracing::debug!("destroying session by id `{}`", session.id());
+        let origin = session
+            .persistence_origin()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| session.id().to_owned());
+        session.destroy();
         let mut conn = self.conn.clone();
-        let _: () = conn.del(self.key(session.id())).await?;
+        let _: () = conn.del(self.key(&origin)).await?;
         Ok(())
     }
 
