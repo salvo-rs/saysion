@@ -1,24 +1,24 @@
 use crate::{Result, Session, SessionStore, async_trait};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
-/// A session store that serializes the entire session into a Cookie.
+/// An unauthenticated codec that serializes the entire session into a cookie.
 ///
-/// # ***This is not recommended for most production deployments.***
+/// # Security
 ///
-/// This implementation uses [`postcard`] to serialize the
-/// Session to decrease the size of the cookie. Note: There is a
-/// maximum of 4093 cookie bytes allowed _per domain_, so the cookie
-/// store is limited in capacity.
+/// This type does **not** sign, authenticate, or encrypt its output. Clients
+/// can forge every field, including identity, privileges, and expiry, unless
+/// the middleware authenticates the entire value before calling `load_session`.
+/// Use [`crate::SignedCookieStore`] when the middleware does not provide this
+/// protection. Keeping this codec separate supports middleware such as Salvo's
+/// session handler, which signs cookie values itself.
 ///
-/// **Note:** Currently, the data in the cookie is only signed, but *not
-/// encrypted*. If the contained session data is sensitive and
-/// should not be read by a user, the cookie store is not an
-/// appropriate choice.
+/// Data is serialized with [`postcard`] and Base64, and remains readable by the
+/// client. Do not store secrets or confidential personal data. The middleware
+/// must enforce an appropriate cookie size limit.
 ///
-/// Expiry: `SessionStore::destroy_session` and
-/// `SessionStore::clear_store` are not meaningful for the
-/// CookieStore, and noop. Destroying a session must be done at the
-/// cookie setting level, which is outside of the scope of this crate.
+/// `destroy_session` and `clear_store` are no-ops. Removing a browser cookie
+/// does not revoke a copied value: it can be replayed until its authenticated
+/// expiry. Use a server-side store when immediate revocation is required.
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct CookieStore;

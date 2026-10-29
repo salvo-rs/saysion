@@ -5,6 +5,8 @@
 //! `postgres://postgres:postgres@127.0.0.1/saysion_test`).
 //! Run with `cargo test --features sqlx-postgres -- --ignored`.
 
+mod common;
+
 use std::time::Duration;
 
 use saysion::{Session, SessionStore, SqlxPostgresStore};
@@ -14,14 +16,38 @@ fn url() -> String {
         .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1/saysion_test".to_string())
 }
 
-async fn fresh_store() -> SqlxPostgresStore {
-    let store = SqlxPostgresStore::from_url(&url())
+struct TestStore {
+    store: SqlxPostgresStore,
+    pool: sqlx::PgPool,
+    table: String,
+}
+
+impl std::ops::Deref for TestStore {
+    type Target = SqlxPostgresStore;
+
+    fn deref(&self) -> &Self::Target {
+        &self.store
+    }
+}
+
+impl TestStore {
+    async fn finish(self) {
+        sqlx::query(&format!("DROP TABLE {}", self.table))
+            .execute(&self.pool)
+            .await
+            .expect("drop test table");
+        self.pool.close().await;
+    }
+}
+
+async fn fresh_store() -> TestStore {
+    let pool = sqlx::PgPool::connect(&url())
         .await
-        .expect("connect to postgres")
-        .with_table("saysion_test_sessions");
+        .expect("connect to postgres");
+    let table = format!("saysion_test_{:016x}", rand::random::<u64>());
+    let store = SqlxPostgresStore::new(pool.clone()).with_table(&table);
     store.migrate().await.expect("migrate");
-    store.clear_store().await.expect("clear");
-    store
+    TestStore { store, pool, table }
 }
 
 #[tokio::test]
@@ -35,8 +61,9 @@ async fn pg_roundtrip() {
 
     let loaded = store.load_session(cookie).await.unwrap().unwrap();
     assert_eq!(loaded.get::<String>("hello").unwrap(), "world");
+    common::assert_contract(&*store).await;
 
-    store.clear_store().await.unwrap();
+    store.finish().await;
 }
 
 #[tokio::test]
@@ -54,6 +81,7 @@ async fn pg_expiry_and_cleanup() {
 
     store.cleanup().await.unwrap();
     assert_eq!(store.count().await.unwrap(), 0);
+    store.finish().await;
 }
 
 #[tokio::test]
@@ -73,4 +101,5 @@ async fn pg_destroy_and_clear() {
 
     store.clear_store().await.unwrap();
     assert_eq!(store.count().await.unwrap(), 0);
+    store.finish().await;
 }

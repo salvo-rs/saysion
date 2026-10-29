@@ -1,0 +1,8 @@
+[advisories]
+# SQLx 0.8 MySQL authentication only encrypts with the server's public key;
+# RUSTSEC-2023-0071 concerns timing leakage from private-key operations.
+# No patched RSA version exists as of 2026-10-29. Review by 2027-01-29 and
+# on any SQLx/RSA upgrade. This exception applies only to this repository's
+# audited graph, not to additional RSA uses in downstream applications.
+# Evidence and scope: docs/dependency-security.md.
+ignore = ["RUSTSEC-2023-0071"]
