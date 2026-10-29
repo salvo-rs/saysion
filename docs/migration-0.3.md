@@ -70,6 +70,11 @@ validate the stored ID against the cookie, check expiry, and establish loaded
 persistence state. Do not infer state from an empty or unchanged application
 data map. No public setter grants arbitrary revision or fresh-session authority.
 
+For deletion, call `Session::prepare_delete(&mut self)` and delete the returned
+persisted source ID. This marks the session for destruction, also accepts an
+already marked session, and targets the source of an unsaved rotation. A stale
+clone must not delete another clone's newly persisted identity.
+
 ## Cookies and stored data
 
 `CookieStore` remains an unsigned, unencrypted codec for middleware that already
