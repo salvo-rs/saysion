@@ -7,13 +7,30 @@ Saysion 提供多种可插拔的会话存储后端,大多数通过 cargo feature
 |---------------------|------------------|------------------|
 | `MemoryStore`       | *(始终可用)*     | 进程内内存       |
 | `CookieStore`       | *(始终可用)*     | 客户端 Cookie    |
+| `SignedCookieStore` | *(始终可用)*     | HMAC 认证的客户端 Cookie |
 | `RedisStore`        | `redis`          | Redis            |
 | `MongoDbStore`      | `mongodb`        | MongoDB          |
 | `SqlxPostgresStore` | `sqlx-postgres`  | PostgreSQL       |
 | `SqlxSqliteStore`   | `sqlx-sqlite`    | SQLite           |
 | `SqlxMySqlStore`    | `sqlx-mysql`     | MySQL / MariaDB  |
 
-所有存储都实现了 [`SessionStore`] trait,可以互相替换。
+所有存储都实现了 [`SessionStore`] trait,替换时仍须满足各自的安全和撤销要求。
+
+## 客户端 Cookie
+
+`CookieStore` 是**不签名、不加密的编码器**,仅适用于已对完整 Cookie 值认证的
+中间件,例如 Salvo 会话中间件。没有这一保护时,不能直接接受客户端提交的值。
+
+中间件未提供认证时,使用 `SignedCookieStore::new(secret_key)?`,传入至少 32 字节
+的随机秘密密钥,跨重启保存密钥,并为会话设置有限过期时间。轮换时使用
+`SignedCookieStore::new(new_key)?.with_fallback_key(old_key)?`:旧密钥仅验证已有
+Cookie,新 Cookie 始终使用当前密钥签名。不会接受未签名的 `CookieStore` 值作为
+迁移回退。
+
+签名后的值最多 3800 字节,中间件还需计算 Cookie 名称、属性和外层签名的大小。
+两种存储都不加密内容,也不支持服务端撤销;删除浏览器 Cookie 无法使已复制的值
+失效。机密数据或需要注销后立即撤销的会话应使用服务端存储。HTTP 中间件还应
+设置 `Secure`、`HttpOnly` 和合适的 `SameSite` 策略。
 
 ## Redis
 
