@@ -265,6 +265,42 @@ mod sqlite {
 
     use crate::{Result, Session, SessionStore, async_trait};
 
+    fn index_target(table: &str) -> (String, &str) {
+        let index = expiry_index_name(table);
+        let mut quote = None;
+        let mut characters = table.char_indices().peekable();
+        while let Some((position, character)) = characters.next() {
+            if let Some(delimiter) = quote {
+                if character == delimiter {
+                    if delimiter != ']'
+                        && characters
+                            .peek()
+                            .is_some_and(|(_, next)| *next == delimiter)
+                    {
+                        characters.next();
+                    } else {
+                        quote = None;
+                    }
+                }
+            } else {
+                match character {
+                    '"' | '\'' | '`' => quote = Some(character),
+                    '[' => quote = Some(']'),
+                    '.' => {
+                        // SQLite qualifies the index, not the table in ON.
+                        // Preserve quoted identifiers, including embedded dots.
+                        return (
+                            format!("{}.{}", table[..position].trim(), index),
+                            table[position + 1..].trim(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (index, table)
+    }
+
     /// SQLite-backed session store.
     #[derive(Clone, Debug)]
     pub struct SqlxSqliteStore {
@@ -299,10 +335,9 @@ mod sqlite {
                 table = self.table
             );
             sqlx::query(&sql).execute(&self.pool).await?;
+            let (index, table) = index_target(&self.table);
             let sql = format!(
-                "CREATE INDEX IF NOT EXISTS {} ON {} (expires, id) WHERE expires IS NOT NULL",
-                expiry_index_name(&self.table),
-                self.table
+                "CREATE INDEX IF NOT EXISTS {index} ON {table} (expires, id) WHERE expires IS NOT NULL"
             );
             sqlx::query(&sql).execute(&self.pool).await?;
             Ok(())
