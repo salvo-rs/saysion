@@ -20,7 +20,7 @@ interchangeable.
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["redis"] }
+saysion = { version = "0.2", features = ["redis"] }
 ```
 
 ```rust
@@ -51,7 +51,7 @@ automatically.
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["mongodb"] }
+saysion = { version = "0.2", features = ["mongodb"] }
 ```
 
 ```rust
@@ -87,7 +87,7 @@ Pick the feature(s) for the database(s) you actually use:
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["sqlx-postgres"] }
+saysion = { version = "0.2", features = ["sqlx-postgres"] }
 # or "sqlx-sqlite", "sqlx-mysql" — multiple are allowed
 ```
 

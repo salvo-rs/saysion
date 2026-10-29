@@ -19,7 +19,7 @@ Saysion 提供多种可插拔的会话存储后端,大多数通过 cargo feature
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["redis"] }
+saysion = { version = "0.2", features = ["redis"] }
 ```
 
 ```rust
@@ -49,7 +49,7 @@ async fn main() -> saysion::Result {
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["mongodb"] }
+saysion = { version = "0.2", features = ["mongodb"] }
 ```
 
 ```rust
@@ -84,7 +84,7 @@ MongoDB 会自动清理过期会话。
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["sqlx-postgres"] }
+saysion = { version = "0.2", features = ["sqlx-postgres"] }
 # 或者 "sqlx-sqlite", "sqlx-mysql"
 ```
 
