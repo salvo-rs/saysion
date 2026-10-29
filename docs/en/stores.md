@@ -1,5 +1,9 @@
 # Saysion Session Stores
 
+> **0.3.0 is unreleased.** This guide describes Git `main`, not the published
+> 0.2.0 package. The new APIs require Rust 1.95 or newer. Until 0.3.0 is published,
+> use the Git dependency below. See the [migration guide](../migration-0.3.md).
+
 Saysion ships with several pluggable session stores. Most are gated
 behind cargo features so you only pull in the dependencies you need.
 
@@ -41,7 +45,7 @@ the HTTP middleware.
 
 ```toml
 [dependencies]
-saysion = { version = "0.2", features = ["redis"] }
+saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["redis"] }
 ```
 
 ```rust
@@ -72,7 +76,7 @@ automatically.
 
 ```toml
 [dependencies]
-saysion = { version = "0.2", features = ["mongodb"] }
+saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["mongodb"] }
 ```
 
 ```rust
@@ -108,7 +112,7 @@ Pick the feature(s) for the database(s) you actually use:
 
 ```toml
 [dependencies]
-saysion = { version = "0.2", features = ["sqlx-postgres"] }
+saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["sqlx-postgres"] }
 # or "sqlx-sqlite", "sqlx-mysql" — multiple are allowed
 ```
 

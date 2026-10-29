@@ -26,6 +26,23 @@
 
 *Fork from: https://github.com/http-rs/async-session*
 
+## Installation (0.3.0 unreleased)
+
+The current `main` branch targets **0.3.0**, which has not been published to
+crates.io. It requires **Rust 1.95 or newer**. Published 0.2.0 does not contain
+`SignedCookieStore`, `SessionConflict`, or the new persistence guarantees.
+Use the development source until 0.3.0 is released:
+
+```toml
+[dependencies]
+saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main" }
+```
+
+Commit your application's `Cargo.lock` to retain its resolved Git revision;
+update the dependency deliberately when following this moving branch. Add the
+backend feature you need, such as `features = ["redis"]`.
+See the [0.3 migration guide](docs/migration-0.3.md) and [changelog](CHANGELOG.md).
+
 ## Session stores
 
 Backend setup and feature flags: [English](docs/en/stores.md) |
