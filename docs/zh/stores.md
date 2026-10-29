@@ -7,19 +7,36 @@ Saysion 提供多种可插拔的会话存储后端,大多数通过 cargo feature
 |---------------------|------------------|------------------|
 | `MemoryStore`       | *(始终可用)*     | 进程内内存       |
 | `CookieStore`       | *(始终可用)*     | 客户端 Cookie    |
+| `SignedCookieStore` | *(始终可用)*     | HMAC 认证的客户端 Cookie |
 | `RedisStore`        | `redis`          | Redis            |
 | `MongoDbStore`      | `mongodb`        | MongoDB          |
 | `SqlxPostgresStore` | `sqlx-postgres`  | PostgreSQL       |
 | `SqlxSqliteStore`   | `sqlx-sqlite`    | SQLite           |
 | `SqlxMySqlStore`    | `sqlx-mysql`     | MySQL / MariaDB  |
 
-所有存储都实现了 [`SessionStore`] trait,可以互相替换。
+所有存储都实现了 [`SessionStore`] trait,替换时仍须满足各自的安全和撤销要求。
+
+## 客户端 Cookie
+
+`CookieStore` 是**不签名、不加密的编码器**,仅适用于已对完整 Cookie 值认证的
+中间件,例如 Salvo 会话中间件。没有这一保护时,不能直接接受客户端提交的值。
+
+中间件未提供认证时,使用 `SignedCookieStore::new(secret_key)?`,传入至少 32 字节
+的随机秘密密钥,跨重启保存密钥,并为会话设置有限过期时间。轮换时使用
+`SignedCookieStore::new(new_key)?.with_fallback_key(old_key)?`:旧密钥仅验证已有
+Cookie,新 Cookie 始终使用当前密钥签名。不会接受未签名的 `CookieStore` 值作为
+迁移回退。
+
+签名后的值最多 3800 字节,中间件还需计算 Cookie 名称、属性和外层签名的大小。
+两种存储都不加密内容,也不支持服务端撤销;删除浏览器 Cookie 无法使已复制的值
+失效。机密数据或需要注销后立即撤销的会话应使用服务端存储。HTTP 中间件还应
+设置 `Secure`、`HttpOnly` 和合适的 `SameSite` 策略。
 
 ## Redis
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["redis"] }
+saysion = { version = "0.2", features = ["redis"] }
 ```
 
 ```rust
@@ -49,7 +66,7 @@ async fn main() -> saysion::Result {
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["mongodb"] }
+saysion = { version = "0.2", features = ["mongodb"] }
 ```
 
 ```rust
@@ -84,7 +101,7 @@ MongoDB 会自动清理过期会话。
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["sqlx-postgres"] }
+saysion = { version = "0.2", features = ["sqlx-postgres"] }
 # 或者 "sqlx-sqlite", "sqlx-mysql"
 ```
 
@@ -110,8 +127,11 @@ async fn main() -> saysion::Result {
     let loaded = store.load_session(cookie).await?.unwrap();
     assert_eq!(loaded.get::<i32>("user_id"), Some(42));
 
-    // 定期清理过期记录。
+    // 定期清理一批过期记录（每次至多 1,000 条）。
     store.cleanup().await?;
+    // 也可以选择 1..=10,000 条的批量上限，并根据返回数量安排后续清理。
+    let removed = store.cleanup_batch(500).await?;
+    println!("已清理 {removed} 条过期会话");
     Ok(())
 }
 ```
@@ -137,6 +157,12 @@ let store = saysion::SqlxMySqlStore::from_url("mysql://root:root@127.0.0.1/myapp
 过期时间存为 unix 秒整数,使三种数据库的查询完全一致,也避免了
 为 sqlx 启用额外的时间类型转换 feature。
 
+`migrate()` 还会为已有表添加过期索引，可以重复调用。
+`cleanup()` 每次最多删除 1,000 条记录；`cleanup_batch(limit)` 允许指定
+1 到 10,000 条的上限，并返回删除数量。两者每次只执行一批，不会循环清空
+整张表，调用方应按需安排后续清理。秒级字段继续兼容旧数据；加载时会校验
+序列化会话中的精确过期时间，清理时暂时保留当前秒的记录，避免提前删除。
+
 ## 在多个 handler 之间共享 store
 
 所有 store 都实现了 `Clone`,克隆代价很低(内部已经是连接池或连接
@@ -144,7 +170,9 @@ let store = saysion::SqlxMySqlStore::from_url("mysql://root:root@127.0.0.1/myapp
 
 ## 运行集成测试
 
-每个后端都附带集成测试,默认带 `#[ignore]` 标记,需要显式开启:
+SQLite 集成测试使用独立的内存数据库，默认自动运行。其他后端测试在本地
+带 `#[ignore]` 标记，CI 会使用真实服务运行。每个测试使用独立的 Redis
+前缀、MongoDB 集合或 SQL 表，可以并行运行：
 
 ```bash
 # Redis
@@ -160,7 +188,7 @@ POSTGRES_URL=postgres://postgres:postgres@127.0.0.1/saysion_test \
     cargo test --features sqlx-postgres -- --ignored
 
 # SQLite(无需外部服务)
-cargo test --features sqlx-sqlite -- --ignored
+cargo test --features sqlx-sqlite --test sqlx_sqlite
 
 # MySQL
 MYSQL_URL=mysql://root:root@127.0.0.1/saysion_test \

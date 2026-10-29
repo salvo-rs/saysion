@@ -11,6 +11,13 @@ use crate::{Result, Session, SessionStore, async_trait};
 
 const DEFAULT_COLLECTION: &str = "saysion_sessions";
 
+fn expiry_datetime(expiry: &time::OffsetDateTime) -> BsonDateTime {
+    // Round up so MongoDB's TTL monitor cannot delete a still-valid session.
+    let millis =
+        expiry.unix_timestamp() * 1000 + i64::from(expiry.nanosecond().div_ceil(1_000_000));
+    BsonDateTime::from_millis(millis)
+}
+
 /// A session store backed by MongoDB.
 ///
 /// The official `mongodb` driver maintains its own connection pool
@@ -101,9 +108,7 @@ impl SessionStore for MongoDbStore {
         }
         let (snapshot, revision) = session.persistence_snapshot();
         let json = serde_json::to_string(&snapshot)?;
-        let expires_at = snapshot
-            .expiry()
-            .map(|e| BsonDateTime::from_millis(e.unix_timestamp() * 1000));
+        let expires_at = snapshot.expiry().map(expiry_datetime);
         let doc_value = SessionDoc {
             id: id.clone(),
             expires_at,
@@ -154,5 +159,26 @@ impl SessionStore for MongoDbStore {
         tracing::debug!("clearing mongodb store");
         self.coll().delete_many(doc! {}).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ttl_timestamp_rounds_up_including_before_epoch() {
+        for (nanos, millis) in [
+            (0, 0),
+            (1, 1),
+            (1_000_000, 1),
+            (1_000_001, 2),
+            (999_999_999, 1000),
+            (-1, 0),
+            (-1_000_001, -1),
+        ] {
+            let expiry = time::OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap();
+            assert_eq!(expiry_datetime(&expiry).timestamp_millis(), millis);
+        }
     }
 }

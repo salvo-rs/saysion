@@ -4,6 +4,8 @@ use async_lock::RwLock;
 
 use crate::{Result, Session, SessionStore, async_trait};
 
+const CLEANUP_BATCH_SIZE: usize = 256;
+
 /// # in-memory session store
 /// Because there is no external
 /// persistence, this session store is ephemeral and will be cleared
@@ -28,9 +30,16 @@ use crate::{Result, Session, SessionStore, async_trait};
 /// - [async-redis-session](https://crates.io/crates/async-redis-session)
 /// - [async-mongodb-session](https://crates.io/crates/async-mongodb-session)
 ///
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Clone)]
 pub struct MemoryStore {
     inner: Arc<RwLock<HashMap<String, Session>>>,
+}
+
+impl std::fmt::Debug for MemoryStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Do not traverse sessions or acquire the store lock for diagnostics.
+        f.debug_struct("MemoryStore").finish_non_exhaustive()
+    }
 }
 
 #[async_trait]
@@ -107,25 +116,42 @@ impl MemoryStore {
     /// memory accumulation is a concern
     pub async fn cleanup(&self) -> Result {
         tracing::debug!("cleaning up memory store...");
-        let ids_to_delete: Vec<_> = self
-            .inner
+        let now = time::OffsetDateTime::now_utc();
+        let ids_to_delete = self.expired_candidates(now).await;
+        tracing::debug!("found {} expired sessions", ids_to_delete.len());
+        self.remove_expired_candidates(&ids_to_delete, now).await;
+        Ok(())
+    }
+
+    async fn expired_candidates(&self, now: time::OffsetDateTime) -> Vec<String> {
+        self.inner
             .read()
             .await
             .values()
             .filter_map(|session| {
-                if session.is_expired() {
+                if session.expiry().is_some_and(|expiry| *expiry < now) {
                     Some(session.id().to_owned())
                 } else {
                     None
                 }
             })
-            .collect();
+            .collect()
+    }
 
-        tracing::debug!("found {} expired sessions", ids_to_delete.len());
-        for id in ids_to_delete {
-            self.inner.write().await.remove(&id);
+    async fn remove_expired_candidates(&self, ids: &[String], now: time::OffsetDateTime) {
+        for batch in ids.chunks(CLEANUP_BATCH_SIZE) {
+            let mut sessions = self.inner.write().await;
+            for id in batch {
+                // A request may have renewed this ID after candidate selection.
+                // Check the current entry while holding the same lock as remove.
+                let expired = sessions
+                    .get(id)
+                    .is_some_and(|session| session.expiry().is_some_and(|expiry| *expiry < now));
+                if expired {
+                    sessions.remove(id);
+                }
+            }
         }
-        Ok(())
     }
 
     /// returns the number of elements in the memory store
@@ -190,6 +216,60 @@ mod tests {
                 .get::<u64>("value"),
             Some(2)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cleanup_rechecks_renewed_candidates_before_removal() -> Result {
+        let store = MemoryStore::new();
+        let now = time::OffsetDateTime::now_utc();
+        let mut session = Session::new();
+        session.set_expiry(now + Duration::from_secs(3_600));
+        let mut renewed = session.clone();
+        let cookie = store.store_session(session).await?.unwrap();
+        // Model expiry while an already-loaded request is still running.
+        store
+            .inner
+            .write()
+            .await
+            .get_mut(renewed.id())
+            .unwrap()
+            .set_expiry(now - Duration::from_secs(1));
+        let candidates = store.expired_candidates(now).await;
+        assert_eq!(candidates, vec![renewed.id().to_owned()]);
+
+        renewed.set_expiry(now + Duration::from_secs(3_600));
+        store.store_session(renewed).await?;
+        store.remove_expired_candidates(&candidates, now).await;
+
+        assert_eq!(store.count().await, 1);
+        assert!(store.load_session(cookie).await?.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_expired_sessions_across_batches() -> Result {
+        let store = MemoryStore::new();
+        let now = time::OffsetDateTime::now_utc();
+        for _ in 0..(CLEANUP_BATCH_SIZE + 1) {
+            let mut session = Session::new();
+            session.set_expiry(now - Duration::from_secs(1));
+            store
+                .inner
+                .write()
+                .await
+                .insert(session.id().to_owned(), session.snapshot());
+        }
+        let mut live = Session::new();
+        live.set_expiry(now + Duration::from_secs(3_600));
+        let live_cookie = store.store_session(live).await?.unwrap();
+        let permanent_cookie = store.store_session(Session::new()).await?.unwrap();
+
+        store.cleanup().await?;
+
+        assert_eq!(store.count().await, 2);
+        assert!(store.load_session(live_cookie).await?.is_some());
+        assert!(store.load_session(permanent_cookie).await?.is_some());
         Ok(())
     }
 

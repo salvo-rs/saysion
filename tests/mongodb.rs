@@ -5,6 +5,8 @@
 //! the default of `mongodb://127.0.0.1:27017`. All tests are
 //! `#[ignore]` — run with `cargo test --features mongodb -- --ignored`.
 
+mod common;
+
 use std::time::Duration;
 
 use saysion::{MongoDbStore, Session, SessionStore};
@@ -13,13 +15,43 @@ fn url() -> String {
     std::env::var("MONGODB_URL").unwrap_or_else(|_| "mongodb://127.0.0.1:27017".to_string())
 }
 
-async fn fresh_store() -> MongoDbStore {
-    let store = MongoDbStore::from_uri(&url(), "saysion_test")
+struct TestStore {
+    store: MongoDbStore,
+    client: mongodb::Client,
+    collection: String,
+}
+
+impl std::ops::Deref for TestStore {
+    type Target = MongoDbStore;
+
+    fn deref(&self) -> &Self::Target {
+        &self.store
+    }
+}
+
+impl TestStore {
+    async fn finish(self) {
+        self.client
+            .database("saysion_test")
+            .collection::<mongodb::bson::Document>(&self.collection)
+            .drop()
+            .await
+            .expect("drop test collection");
+    }
+}
+
+async fn fresh_store() -> TestStore {
+    let client = mongodb::Client::with_uri_str(url())
         .await
-        .expect("connect to mongodb")
-        .with_collection("sessions_test");
-    store.clear_store().await.expect("clear");
-    store
+        .expect("connect to mongodb");
+    let collection = format!("sessions_test_{:016x}", rand::random::<u64>());
+    let store = MongoDbStore::new(client.clone(), "saysion_test").with_collection(&collection);
+    store.initialize().await.expect("initialize TTL index");
+    TestStore {
+        store,
+        client,
+        collection,
+    }
 }
 
 #[tokio::test]
@@ -33,8 +65,9 @@ async fn mongodb_roundtrip() {
 
     let loaded = store.load_session(cookie).await.unwrap().unwrap();
     assert_eq!(loaded.get::<String>("hello").unwrap(), "world");
+    common::assert_contract(&*store).await;
 
-    store.clear_store().await.unwrap();
+    store.finish().await;
 }
 
 #[tokio::test]
@@ -50,7 +83,7 @@ async fn mongodb_expiry() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(store.load_session(cookie).await.unwrap().is_none());
 
-    store.clear_store().await.unwrap();
+    store.finish().await;
 }
 
 #[tokio::test]
@@ -71,4 +104,5 @@ async fn mongodb_destroy_and_clear() {
 
     store.clear_store().await.unwrap();
     assert_eq!(store.count().await.unwrap(), 0);
+    store.finish().await;
 }
