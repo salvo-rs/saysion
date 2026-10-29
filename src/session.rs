@@ -165,6 +165,30 @@ impl Session {
         (snapshot, data.revision)
     }
 
+    /// Encode one bounded data snapshot together with its revision. Borrowing
+    /// the values under their lock avoids cloning an oversized map before the
+    /// serializer can reject it. The wire fields match Session's representation.
+    pub(crate) fn serialize_bounded<'buffer>(
+        &self,
+        buffer: &'buffer mut [u8],
+    ) -> Result<(&'buffer mut [u8], u64), postcard::Error> {
+        #[derive(Serialize)]
+        struct WireSession<'a> {
+            id: &'a str,
+            expiry: Option<DateTime>,
+            data: &'a HashMap<String, String>,
+        }
+
+        let data = self.data.read().unwrap();
+        let wire = WireSession {
+            id: &self.id,
+            expiry: self.expiry,
+            data: &data.values,
+        };
+        let payload = postcard::to_slice(&wire, buffer)?;
+        Ok((payload, data.revision))
+    }
+
     /// Acknowledge only the data represented by a successfully saved snapshot.
     pub(crate) fn acknowledge_revision(&self, revision: u64) {
         self.data.write().unwrap().persisted_revision = revision;
@@ -754,6 +778,24 @@ impl PartialEq for Session {
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+
+    #[test]
+    fn bounded_serialization_captures_the_wire_data_and_revision_together() {
+        let mut session = Session::new();
+        session.insert("value", 1_u64).unwrap();
+        let expected = postcard::to_stdvec(&session).unwrap();
+        let mut buffer = [0; 4096];
+        let (payload, revision) = session.serialize_bounded(&mut buffer).unwrap();
+        assert_eq!(payload, expected);
+        let saved: Session = postcard::from_bytes(payload).unwrap();
+
+        let mut editor = session.clone();
+        editor.insert("value", 2_u64).unwrap();
+        session.acknowledge_revision(revision);
+        assert!(editor.data_changed());
+        assert_eq!(saved.get::<u64>("value"), Some(1));
+        assert_eq!(editor.get::<u64>("value"), Some(2));
+    }
 
     #[test]
     fn creation_authority_is_consumed_even_after_failure_or_cancellation() {
