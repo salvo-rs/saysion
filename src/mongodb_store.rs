@@ -102,7 +102,8 @@ impl SessionStore for MongoDbStore {
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let id = session.id().to_string();
         tracing::debug!("storing session by id `{}`", id);
-        let origin = session.persistence_origin()?;
+        let attempt = session.persistence_attempt()?;
+        let origin = attempt.origin.clone();
         if session.is_destroyed() {
             return Err(crate::SessionConflict.into());
         }
@@ -127,16 +128,18 @@ impl SessionStore for MongoDbStore {
                 return Err(crate::SessionConflict.into());
             }
             self.coll().insert_one(&doc_value).await?;
-        } else if origin.is_some() {
-            let result = self
-                .coll()
-                .replace_one(doc! { "_id": &id }, &doc_value)
-                .await?;
-            if result.matched_count != 1 {
-                return Err(crate::SessionConflict.into());
-            }
         } else {
-            self.coll().insert_one(&doc_value).await?;
+            if origin.is_some() {
+                let result = self
+                    .coll()
+                    .replace_one(doc! { "_id": &id }, &doc_value)
+                    .await?;
+                if result.matched_count != 1 {
+                    return Err(crate::SessionConflict.into());
+                }
+            } else {
+                self.coll().insert_one(&doc_value).await?;
+            }
         }
         session.mark_persisted();
         session.acknowledge_revision(revision);

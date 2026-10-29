@@ -59,9 +59,14 @@ impl SessionStore for MemoryStore {
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         tracing::debug!("storing session by id `{}`", session.id());
+        let attempt = session.persistence_attempt()?;
         let (snapshot, revision) = session.persistence_snapshot();
         let mut records = self.inner.write().await;
-        let origin = session.persistence_origin()?;
+        let origin = if attempt.origin.is_none() {
+            None
+        } else {
+            session.persistence_origin()?
+        };
         if session.is_destroyed() {
             return Err(crate::SessionConflict.into());
         }

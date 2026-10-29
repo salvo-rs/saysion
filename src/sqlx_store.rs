@@ -178,10 +178,8 @@ mod pg {
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
-            if session.is_destroyed() {
-                return Err(crate::SessionConflict.into());
-            }
-            let origin = session.persistence_origin()?;
+            let attempt = session.persistence_attempt()?;
+            let origin = attempt.origin.clone();
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
             let expires = expiry_unix(&snapshot);
@@ -403,10 +401,8 @@ mod sqlite {
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
-            if session.is_destroyed() {
-                return Err(crate::SessionConflict.into());
-            }
-            let origin = session.persistence_origin()?;
+            let attempt = session.persistence_attempt()?;
+            let origin = attempt.origin.clone();
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
             let expires = expiry_unix(&snapshot);
@@ -600,10 +596,8 @@ mod mysql {
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
-            if session.is_destroyed() {
-                return Err(crate::SessionConflict.into());
-            }
-            let origin = session.persistence_origin()?;
+            let attempt = session.persistence_attempt()?;
+            let origin = attempt.origin.clone();
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
             let expires = expiry_unix(&snapshot);

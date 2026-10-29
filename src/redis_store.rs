@@ -120,7 +120,8 @@ impl SessionStore for RedisStore {
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let id = session.id().to_string();
         tracing::debug!("storing session by id `{}`", id);
-        let origin = session.persistence_origin()?;
+        let attempt = session.persistence_attempt()?;
+        let origin = attempt.origin.clone();
         if session.is_destroyed() {
             return Err(crate::SessionConflict.into());
         }
