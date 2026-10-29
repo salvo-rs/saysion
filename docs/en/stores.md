@@ -7,6 +7,7 @@ behind cargo features so you only pull in the dependencies you need.
 |---------------------|------------------|------------------|
 | `MemoryStore`       | *(always on)*    | In-process       |
 | `CookieStore`       | *(always on)*    | Client cookie    |
+| `SignedCookieStore` | *(always on)*    | HMAC-authenticated client cookie |
 | `RedisStore`        | `redis`          | Redis            |
 | `MongoDbStore`      | `mongodb`        | MongoDB          |
 | `SqlxPostgresStore` | `sqlx-postgres`  | PostgreSQL       |
@@ -14,13 +15,33 @@ behind cargo features so you only pull in the dependencies you need.
 | `SqlxMySqlStore`    | `sqlx-mysql`     | MySQL / MariaDB  |
 
 All stores implement the [`SessionStore`] trait, so they are
-interchangeable.
+interchangeable subject to their security and revocation requirements.
+
+## Client-side cookies
+
+`CookieStore` is an **unsigned, unencrypted codec** for middleware that already
+authenticates the complete cookie value, such as Salvo's session handler. Do not
+accept its raw output from an untrusted client without that protection.
+
+Use `SignedCookieStore::new(secret_key)?` when the middleware does not provide
+authentication. Supply at least 32 bytes of random secret key material, persist
+the key across restarts, and set a finite session expiry. To rotate keys, use
+`SignedCookieStore::new(new_key)?.with_fallback_key(old_key)?`; old keys verify
+existing values while new values use the current key. Unsigned `CookieStore`
+values are never accepted as a migration fallback.
+
+Signed values are limited to 3800 bytes; middleware must also account for cookie
+names, attributes, and any outer signature. Neither store encrypts its contents
+or supports server-side revocation. Removing the browser cookie does not revoke
+copied values. Use a server-side store for confidential data or immediate logout
+revocation, and set `Secure`, `HttpOnly`, and an appropriate `SameSite` policy in
+the HTTP middleware.
 
 ## Redis
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["redis"] }
+saysion = { version = "0.2", features = ["redis"] }
 ```
 
 ```rust
@@ -51,7 +72,7 @@ automatically.
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["mongodb"] }
+saysion = { version = "0.2", features = ["mongodb"] }
 ```
 
 ```rust
@@ -87,7 +108,7 @@ Pick the feature(s) for the database(s) you actually use:
 
 ```toml
 [dependencies]
-saysion = { version = "0.1", features = ["sqlx-postgres"] }
+saysion = { version = "0.2", features = ["sqlx-postgres"] }
 # or "sqlx-sqlite", "sqlx-mysql" — multiple are allowed
 ```
 
@@ -114,8 +135,11 @@ async fn main() -> saysion::Result {
     let loaded = store.load_session(cookie).await?.unwrap();
     assert_eq!(loaded.get::<i32>("user_id"), Some(42));
 
-    // Periodically remove expired rows.
+    // Periodically remove one bounded batch (at most 1,000 expired rows).
     store.cleanup().await?;
+    // Or choose 1..=10,000 rows and inspect progress for scheduling.
+    let removed = store.cleanup_batch(500).await?;
+    println!("removed {removed} expired sessions");
     Ok(())
 }
 ```
@@ -142,6 +166,14 @@ Storing the expiry as a unix-second integer keeps queries portable
 across all three databases without pulling in extra type-conversion
 features.
 
+`migrate()` also adds an expiry index to existing tables and is safe to repeat.
+`cleanup()` deletes at most 1,000 rows per call. Use `cleanup_batch(limit)` with
+a limit from 1 to 10,000 to control each delete statement and obtain its deleted
+row count. Schedule further calls as needed; neither method loops until the
+whole table is clean. The seconds column remains compatible with older data;
+loads validate the precise expiry from the serialized session, and cleanup
+leaves the current second alone to avoid deleting a still-valid session.
+
 ## Sharing a store between handlers
 
 All stores are `Clone` and cheap to clone (they hold an internal pool
@@ -150,8 +182,10 @@ just clone into your application state.
 
 ## Running integration tests
 
-The crate ships integration tests for every backend. They are marked
-`#[ignore]` so they will not run unless you opt in:
+SQLite integration tests run automatically using isolated in-memory databases.
+The service-backed tests are marked `#[ignore]` for local development; CI runs
+all of them against real services. Each test has its own Redis prefix, MongoDB
+collection, or SQL table, so tests can run in parallel:
 
 ```bash
 # Redis
@@ -166,8 +200,8 @@ MONGODB_URL=mongodb://127.0.0.1:27017 \
 POSTGRES_URL=postgres://postgres:postgres@127.0.0.1/saysion_test \
     cargo test --features sqlx-postgres -- --ignored
 
-# SQLite (no service required)
-cargo test --features sqlx-sqlite -- --ignored
+# SQLite (runs automatically; no service required)
+cargo test --features sqlx-sqlite --test sqlx_sqlite
 
 # MySQL
 MYSQL_URL=mysql://root:root@127.0.0.1/saysion_test \
