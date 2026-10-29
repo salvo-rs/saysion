@@ -1,6 +1,50 @@
 #![cfg(feature = "sqlx-sqlite")]
 
-use saysion::{SqlxSqliteStore, time::OffsetDateTime};
+use saysion::{Session, SessionStore, SqlxSqliteStore, time::OffsetDateTime};
+
+#[tokio::test]
+async fn cleanup_indexes_support_main_and_attached_schema_table_names() {
+    // ATTACH applies per connection; use one connection throughout the test.
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    sqlx::query("ATTACH DATABASE ':memory:' AS aux")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("ATTACH DATABASE ':memory:' AS \"aux.db\"")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    for (qualified, schema, name) in [
+        ("main.sessions", "main", "sessions"),
+        ("aux.sessions", "aux", "sessions"),
+        (r#""aux.db"."quoted.table""#, r#""aux.db""#, "quoted.table"),
+        (r#""unqualified.table""#, "main", "unqualified.table"),
+        ("[aux.db].[bracket.table]", "[aux.db]", "bracket.table"),
+    ] {
+        let store = SqlxSqliteStore::new(pool.clone()).with_table(qualified);
+        store.migrate().await.unwrap();
+        store.migrate().await.unwrap();
+        let (indexes,): (i64,) = sqlx::query_as(&format!(
+            "SELECT COUNT(*) FROM {schema}.sqlite_master \
+             WHERE type = 'index' AND tbl_name = ? AND name LIKE 'saysion_expiry_%'"
+        ))
+        .bind(name)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(indexes, 1, "expiry index for {qualified}");
+
+        let cookie = store.store_session(Session::new()).await.unwrap().unwrap();
+        assert!(store.load_session(cookie).await.unwrap().is_some());
+        assert_eq!(store.cleanup_batch(10).await.unwrap(), 0);
+        assert_eq!(store.count().await.unwrap(), 1);
+    }
+}
 
 #[tokio::test]
 async fn cleanup_upgrades_existing_tables_and_uses_the_expiry_index() {
