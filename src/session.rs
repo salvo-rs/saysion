@@ -12,6 +12,11 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime as DateTime;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SNAPSHOT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 // The serialized representation stays a plain map. Revisions are request-local
 // bookkeeping and share the map's lock so a snapshot cannot mix two revisions.
 #[derive(Default, Debug, Serialize, Deserialize)]
@@ -141,6 +146,8 @@ fn generate_cookie(len: usize) -> String {
 impl Session {
     /// An independent persistence snapshot; request-local clones remain shared.
     pub(crate) fn snapshot(&self) -> Self {
+        #[cfg(test)]
+        SNAPSHOT_CALLS.with(|calls| calls.set(calls.get() + 1));
         self.persistence_snapshot().0
     }
 
