@@ -52,6 +52,7 @@ impl SessionStore for MemoryStore {
             .read()
             .await
             .get(&id)
+            .filter(|session| !session.is_expired())
             .map(Session::snapshot)
             .and_then(Session::validate)
             .map(Session::mark_loaded))
@@ -181,6 +182,28 @@ impl MemoryStore {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn loading_expired_records_never_copies_the_session_payload() -> Result {
+        let store = MemoryStore::new();
+        let mut session = Session::new();
+        session.insert_raw("large", "x".repeat(1 << 20));
+        session.set_expiry(time::OffsetDateTime::now_utc() - Duration::from_secs(1));
+        let cookie = store.store_session(session).await?.unwrap();
+        let before = crate::session::SNAPSHOT_CALLS.with(|calls| calls.get());
+        for _ in 0..3 {
+            assert!(store.load_session(cookie.clone()).await?.is_none());
+        }
+        let after = crate::session::SNAPSHOT_CALLS.with(|calls| calls.get());
+        assert_eq!(after, before, "expired records must not enter snapshot()");
+
+        // Instrumentation also observes the real load path for valid records.
+        let cookie = store.store_session(Session::new()).await?.unwrap();
+        assert!(store.load_session(cookie).await?.is_some());
+        let after_valid = crate::session::SNAPSHOT_CALLS.with(|calls| calls.get());
+        assert_eq!(after_valid, before + 1);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn saving_a_snapshot_does_not_clear_a_later_clone_edit() -> Result {
