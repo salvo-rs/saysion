@@ -51,6 +51,11 @@ impl SessionSnapshot {
 /// Completion acknowledges only the captured data, preserving later clone edits.
 /// This type cannot be cloned, and its revision cannot be changed by a store.
 ///
+/// If save handles from the same request-local clone family overlap, completion
+/// order cannot establish the backend's last write. Their shared data remains
+/// dirty until a subsequent standalone save succeeds. Failed or cancelled
+/// handles also leave uncertainty rather than falsely acknowledging a write.
+///
 /// Dropping it never refunds first-insert authority: a cancelled or failed write
 /// may already have reached storage. Load the actual record through its cookie
 /// or authenticate again and create a new session when the outcome is uncertain.
@@ -58,7 +63,7 @@ impl SessionSnapshot {
 pub struct SessionSave {
     source: Session,
     snapshot: SessionSnapshot,
-    revision: u64,
+    revision: crate::session::SaveRevision,
     origin: Option<String>,
 }
 
@@ -129,6 +134,9 @@ impl SessionSave {
     /// rotation. On an error or cancellation, drop the save instead. Later data
     /// edits through a clone remain dirty. Completing an older update cannot
     /// roll back a newer request-local identity marker.
+    /// Overlapping saves conservatively remain dirty regardless of completion
+    /// order; after all handles finish, a standalone successful save can clear
+    /// that uncertainty.
     pub fn complete(self) -> Option<String> {
         self.source.mark_persisted();
         self.source.acknowledge_revision(self.revision);
