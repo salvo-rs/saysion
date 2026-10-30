@@ -172,6 +172,30 @@ impl Session {
         (snapshot, data.revision)
     }
 
+    /// Encode one bounded data snapshot together with its revision. Borrowing
+    /// the values under their lock avoids cloning an oversized map before the
+    /// serializer can reject it. The wire fields match Session's representation.
+    pub(crate) fn serialize_bounded<'buffer>(
+        &self,
+        buffer: &'buffer mut [u8],
+    ) -> Result<(&'buffer mut [u8], u64), postcard::Error> {
+        #[derive(Serialize)]
+        struct WireSession<'a> {
+            id: &'a str,
+            expiry: Option<DateTime>,
+            data: &'a HashMap<String, String>,
+        }
+
+        let data = self.data.read().unwrap();
+        let wire = WireSession {
+            id: &self.id,
+            expiry: self.expiry,
+            data: &data.values,
+        };
+        let payload = postcard::to_slice(&wire, buffer)?;
+        Ok((payload, data.revision))
+    }
+
     /// Acknowledge only the data represented by a successfully saved snapshot.
     pub(crate) fn acknowledge_revision(&self, revision: u64) {
         self.data.write().unwrap().persisted_revision = revision;
@@ -221,6 +245,88 @@ impl Session {
     pub(crate) fn mark_loaded(self) -> Self {
         self.mark_persisted();
         self
+    }
+
+    /// Prepare an immutable snapshot for a server-side store write.
+    ///
+    /// The returned [`crate::SessionSave`] owns this session and captures its
+    /// data before I/O. A fresh session's creation authority is consumed here:
+    /// dropping the save after a failed or cancelled write does not restore it,
+    /// since the backend may already have committed the record.
+    ///
+    /// Loaded sessions require a conditional update. Rotations require removing
+    /// the source and inserting the replacement atomically when supported by
+    /// the backend. See [`crate::SessionSave::origin`].
+    pub fn prepare_save(self) -> crate::Result<crate::SessionSave> {
+        crate::SessionSave::new(self)
+    }
+
+    pub(crate) fn immutable_snapshot(&self) -> (crate::SessionSnapshot, u64) {
+        let data = self.data.read().unwrap();
+        (
+            crate::SessionSnapshot::new(self.id.clone(), self.expiry, data.values.clone()),
+            data.revision,
+        )
+    }
+
+    /// Mark this session for destruction and return its persisted deletion ID.
+    ///
+    /// A pending, unsaved rotation still deletes its original persisted source.
+    /// A superseded clone targets only its own old ID, never a newer clone's
+    /// replacement. Callers must delete this ID in the backend and remove the
+    /// browser cookie. This method does not perform storage I/O or revoke every
+    /// descendant of an already completed rotation.
+    pub fn prepare_delete(&mut self) -> String {
+        let target = self
+            .persistence_origin()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.id.clone());
+        self.destroy();
+        target
+    }
+
+    /// Validate a record obtained by a trusted server-side store.
+    ///
+    /// Call after deserializing a record fetched using `cookie_value`. This
+    /// verifies that the record's ID matches the lookup cookie, rejects expired
+    /// records, and initializes isolated persistence bookkeeping. It does not
+    /// authenticate arbitrary client-supplied serialized data. Client-side
+    /// cookie stores must authenticate their own complete cookie format.
+    ///
+    /// A malformed cookie or mismatched record returns an error. Expired records
+    /// return `Ok(None)`. Loading never shares mutable data or lifecycle state
+    /// with another request-local clone of the input.
+    pub fn validate_loaded(mut self, cookie_value: &str) -> crate::Result<Option<Self>> {
+        let expected = Self::id_from_cookie_value(cookie_value)?;
+        anyhow::ensure!(
+            self.id == expected,
+            "stored session ID does not match cookie"
+        );
+        if self.is_expired() {
+            return Ok(None);
+        }
+        if self.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
+        if Arc::strong_count(&self.data) > 1 {
+            let values = self.data.read().unwrap().values.clone();
+            self.data = Arc::new(RwLock::new(SessionData {
+                values,
+                ..SessionData::default()
+            }));
+        } else {
+            let mut data = self.data.write().unwrap();
+            data.persisted_revision = data.revision;
+        }
+        self.cookie_value = None;
+        self.metadata_changed = AtomicBool::new(false);
+        self.persisted_id = Arc::new(RwLock::new(Some(self.id.clone())));
+        self.rotation_from = None;
+        self.fresh = false;
+        self.creation_claimed = Arc::default();
+        self.destroy = Arc::default();
+        Ok(Some(self))
     }
 
     /// Create a new session. Generates a random id and matching
@@ -839,6 +945,24 @@ mod read_tests {
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+
+    #[test]
+    fn bounded_serialization_captures_the_wire_data_and_revision_together() {
+        let mut session = Session::new();
+        session.insert("value", 1_u64).unwrap();
+        let expected = postcard::to_stdvec(&session).unwrap();
+        let mut buffer = [0; 4096];
+        let (payload, revision) = session.serialize_bounded(&mut buffer).unwrap();
+        assert_eq!(payload, expected);
+        let saved: Session = postcard::from_bytes(payload).unwrap();
+
+        let mut editor = session.clone();
+        editor.insert("value", 2_u64).unwrap();
+        session.acknowledge_revision(revision);
+        assert!(editor.data_changed());
+        assert_eq!(saved.get::<u64>("value"), Some(1));
+        assert_eq!(editor.get::<u64>("value"), Some(2));
+    }
 
     #[test]
     fn creation_authority_is_consumed_even_after_failure_or_cancellation() {
