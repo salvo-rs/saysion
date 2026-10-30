@@ -128,3 +128,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Check downstream MongoDB proxy fixture formatting
+        run: cargo fmt --manifest-path tests/fixtures/mongodb-proxy-debug/Cargo.toml -- --check
+      - name: Test downstream MongoDB proxy Debug redaction without services
+        run: cargo test --manifest-path tests/fixtures/mongodb-proxy-debug/Cargo.toml

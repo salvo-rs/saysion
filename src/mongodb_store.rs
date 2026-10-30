@@ -23,11 +23,23 @@ fn expiry_datetime(expiry: &time::OffsetDateTime) -> BsonDateTime {
 /// The official `mongodb` driver maintains its own connection pool
 /// internally, so a single [`Client`] (and therefore a single
 /// `MongoDbStore`) can be cloned cheaply and shared between tasks.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MongoDbStore {
     client: Client,
     db: String,
     coll_name: String,
+}
+
+impl std::fmt::Debug for MongoDbStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Driver feature unification can enable options whose Debug includes
+        // credentials (for example SOCKS5 proxy authentication). Never expand
+        // the client, even if a particular driver's ordinary credentials redact.
+        f.debug_struct("MongoDbStore")
+            .field("db", &self.db)
+            .field("coll_name", &self.coll_name)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Serialize, Deserialize)]

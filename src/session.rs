@@ -12,6 +12,11 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime as DateTime;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SNAPSHOT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 // The serialized representation stays a plain map. Revisions are request-local
 // bookkeeping and share the map's lock so a snapshot cannot mix two revisions.
 #[derive(Default, Debug, Serialize, Deserialize)]
@@ -141,6 +146,8 @@ fn generate_cookie(len: usize) -> String {
 impl Session {
     /// An independent persistence snapshot; request-local clones remain shared.
     pub(crate) fn snapshot(&self) -> Self {
+        #[cfg(test)]
+        SNAPSHOT_CALLS.with(|calls| calls.set(calls.get() + 1));
         self.persistence_snapshot().0
     }
 
@@ -388,9 +395,13 @@ impl Session {
     /// # }
     /// ```
     pub fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
-        let data = self.data.read().unwrap();
-        let string = data.values.get(key)?;
-        serde_json::from_str(string).ok()
+        // User-defined Deserialize implementations may reenter this session.
+        // Keep only the string copy inside the critical section.
+        let string = {
+            let data = self.data.read().unwrap();
+            data.values.get(key)?.clone()
+        };
+        serde_json::from_str(&string).ok()
     }
 
     /// returns the String value contained in the session hashmap
@@ -748,6 +759,80 @@ impl Session {
 impl PartialEq for Session {
     fn eq(&self, other: &Self) -> bool {
         other.id == self.id
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use std::cell::RefCell;
+
+    use serde::{Deserializer, de::Error as _};
+
+    use super::*;
+
+    thread_local! {
+        static REENTRANT_SESSION: RefCell<Option<Session>> = const { RefCell::new(None) };
+    }
+
+    struct ReentrantValue(u64);
+
+    impl<'de> Deserialize<'de> for ReentrantValue {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let value = u64::deserialize(deserializer)?;
+            REENTRANT_SESSION.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                let session = slot
+                    .as_mut()
+                    .ok_or_else(|| D::Error::custom("missing reentrant session"))?;
+                // Fail immediately if get retained the read lock. Calling
+                // insert directly in the old implementation would hang, so
+                // this probe makes the regression deterministic and bounded.
+                let probe = session
+                    .data
+                    .try_write()
+                    .map_err(|_| D::Error::custom("get retained its data lock"))?;
+                drop(probe);
+                session
+                    .insert("written_during_deserialization", true)
+                    .map_err(D::Error::custom)
+            })?;
+            Ok(Self(value))
+        }
+    }
+
+    #[test]
+    fn deserialize_can_reenter_the_same_session_for_a_write() -> crate::Result {
+        let mut session = Session::new();
+        session.insert("value", 42_u64)?;
+        session.reset_data_changed();
+        REENTRANT_SESSION.with(|slot| *slot.borrow_mut() = Some(session.clone()));
+        let loaded = session.get::<ReentrantValue>("value");
+        REENTRANT_SESSION.with(|slot| *slot.borrow_mut() = None);
+
+        assert_eq!(loaded.map(|value| value.0), Some(42));
+        assert_eq!(
+            session.get::<bool>("written_during_deserialization"),
+            Some(true)
+        );
+        assert!(session.data_changed());
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_and_failed_reads_preserve_values_and_change_tracking() -> crate::Result {
+        let mut session = Session::new();
+        session.insert("numbers", vec![1_u64, 2, 3])?;
+        session.insert_raw("malformed", "{".to_string());
+        session.reset_data_changed();
+
+        assert_eq!(session.get::<Vec<u64>>("numbers"), Some(vec![1, 2, 3]));
+        assert_eq!(session.get::<u64>("numbers"), None);
+        assert_eq!(session.get::<serde_json::Value>("malformed"), None);
+        assert_eq!(session.get::<u64>("missing"), None);
+        assert_eq!(session.get_raw("numbers").as_deref(), Some("[1,2,3]"));
+        assert_eq!(session.get_raw("malformed").as_deref(), Some("{"));
+        assert!(!session.data_changed());
+        Ok(())
     }
 }
 

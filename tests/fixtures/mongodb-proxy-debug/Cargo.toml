@@ -1,0 +1,14 @@
+[package]
+name = "saysion-mongodb-proxy-debug-fixture"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+# Keep downstream-only driver features out of the library's dependency graph.
+[workspace]
+
+[dependencies]
+saysion = { path = "../../..", features = ["mongodb"] }
+mongodb = { version = "3", features = ["socks5-proxy"] }
+tokio = { version = "1.53.3", features = ["rt", "time", "net"] }
