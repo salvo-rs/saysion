@@ -21,6 +21,43 @@ behind cargo features so you only pull in the dependencies you need.
 All stores implement the [`SessionStore`] trait, so they are
 interchangeable subject to their security and revocation requirements.
 
+## In-memory expiry cleanup
+
+`MemoryStore` rejects expired sessions on load, but applications must schedule
+physical cleanup. `cleanup()` now removes at most 1,000 expired records per call;
+code that previously relied on one call draining every expired record must
+schedule additional batches.
+
+```rust
+use saysion::MemoryStore;
+
+#[tokio::main]
+async fn main() -> saysion::Result {
+    let store = MemoryStore::new();
+    let removed = store.cleanup_batch(500).await?;
+    println!("removed {removed} expired sessions");
+    Ok(())
+}
+```
+
+`cleanup_batch(limit)` accepts 1..=10,000 and returns the number removed. An
+ordered expiry index limits candidate inspection and temporary ID allocation to
+that batch size, without scanning unrelated live or permanent records. Record
+writes, expiry changes, rotation, destruction, and clearing update the index
+under the same store lock. Deletion rechecks the current expiry so concurrent
+renewals survive, and each write lock covers at most 256 candidates. Concurrent
+renewals can reduce a batch's removal count, so a zero result is not a global
+completion barrier while writers remain active.
+
+The index adds one entry per record with an expiry and logarithmic maintenance
+work when such records are saved or removed. Cleanup work depends on the chosen
+batch and index operations, rather than a scan of all stored records.
+
+This is a record-count budget rather than a wall-clock deadline: dropping large
+payloads still takes time. No background cleanup task or store capacity limit
+is created automatically; applications remain responsible for scheduling and
+memory budgets.
+
 ## Client-side cookies
 
 `CookieStore` is an **unsigned, unencrypted codec** for middleware that already
