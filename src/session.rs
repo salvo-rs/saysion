@@ -240,6 +240,88 @@ impl Session {
         self
     }
 
+    /// Prepare an immutable snapshot for a server-side store write.
+    ///
+    /// The returned [`crate::SessionSave`] owns this session and captures its
+    /// data before I/O. A fresh session's creation authority is consumed here:
+    /// dropping the save after a failed or cancelled write does not restore it,
+    /// since the backend may already have committed the record.
+    ///
+    /// Loaded sessions require a conditional update. Rotations require removing
+    /// the source and inserting the replacement atomically when supported by
+    /// the backend. See [`crate::SessionSave::origin`].
+    pub fn prepare_save(self) -> crate::Result<crate::SessionSave> {
+        crate::SessionSave::new(self)
+    }
+
+    pub(crate) fn immutable_snapshot(&self) -> (crate::SessionSnapshot, u64) {
+        let data = self.data.read().unwrap();
+        (
+            crate::SessionSnapshot::new(self.id.clone(), self.expiry, data.values.clone()),
+            data.revision,
+        )
+    }
+
+    /// Mark this session for destruction and return its persisted deletion ID.
+    ///
+    /// A pending, unsaved rotation still deletes its original persisted source.
+    /// A superseded clone targets only its own old ID, never a newer clone's
+    /// replacement. Callers must delete this ID in the backend and remove the
+    /// browser cookie. This method does not perform storage I/O or revoke every
+    /// descendant of an already completed rotation.
+    pub fn prepare_delete(&mut self) -> String {
+        let target = self
+            .persistence_origin()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.id.clone());
+        self.destroy();
+        target
+    }
+
+    /// Validate a record obtained by a trusted server-side store.
+    ///
+    /// Call after deserializing a record fetched using `cookie_value`. This
+    /// verifies that the record's ID matches the lookup cookie, rejects expired
+    /// records, and initializes isolated persistence bookkeeping. It does not
+    /// authenticate arbitrary client-supplied serialized data. Client-side
+    /// cookie stores must authenticate their own complete cookie format.
+    ///
+    /// A malformed cookie or mismatched record returns an error. Expired records
+    /// return `Ok(None)`. Loading never shares mutable data or lifecycle state
+    /// with another request-local clone of the input.
+    pub fn validate_loaded(mut self, cookie_value: &str) -> crate::Result<Option<Self>> {
+        let expected = Self::id_from_cookie_value(cookie_value)?;
+        anyhow::ensure!(
+            self.id == expected,
+            "stored session ID does not match cookie"
+        );
+        if self.is_expired() {
+            return Ok(None);
+        }
+        if self.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
+        if Arc::strong_count(&self.data) > 1 {
+            let values = self.data.read().unwrap().values.clone();
+            self.data = Arc::new(RwLock::new(SessionData {
+                values,
+                ..SessionData::default()
+            }));
+        } else {
+            let mut data = self.data.write().unwrap();
+            data.persisted_revision = data.revision;
+        }
+        self.cookie_value = None;
+        self.metadata_changed = AtomicBool::new(false);
+        self.persisted_id = Arc::new(RwLock::new(Some(self.id.clone())));
+        self.rotation_from = None;
+        self.fresh = false;
+        self.creation_claimed = Arc::default();
+        self.destroy = Arc::default();
+        Ok(Some(self))
+    }
+
     /// Create a new session. Generates a random id and matching
     /// cookie value. Does not set an expiry by default
     ///

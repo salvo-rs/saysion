@@ -59,4 +59,4 @@ sqlx-mysql = ["sqlx", "sqlx/mysql"]
 all-features = true
 
 [dev-dependencies]
-tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "time", "sync"] }

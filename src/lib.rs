@@ -54,6 +54,7 @@ pub type Result<T = ()> = std::result::Result<T, Error>;
 mod cookie_store;
 mod memory_store;
 mod session;
+mod session_save;
 mod session_store;
 mod signed_cookie_store;
 
@@ -71,6 +72,7 @@ mod sqlx_store;
 pub use cookie_store::CookieStore;
 pub use memory_store::MemoryStore;
 pub use session::Session;
+pub use session_save::{SessionSave, SessionSnapshot};
 pub use session_store::{SessionConflict, SessionStore};
 pub use signed_cookie_store::SignedCookieStore;
 
