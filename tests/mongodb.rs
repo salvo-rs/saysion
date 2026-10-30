@@ -56,6 +56,26 @@ async fn fresh_store() -> TestStore {
 
 #[tokio::test]
 #[ignore]
+async fn mongodb_rejects_a_valid_blob_bound_to_another_record() {
+    use mongodb::bson::{Document, doc};
+
+    let store = fresh_store().await;
+    let collection = store
+        .client
+        .database("saysion_test")
+        .collection::<Document>(&store.collection);
+    common::assert_identity_binding(&*store, |id, blob| async move {
+        collection
+            .update_one(doc! { "_id": id }, doc! { "$set": { "session": blob } })
+            .await
+            .unwrap();
+    })
+    .await;
+    store.finish().await;
+}
+
+#[tokio::test]
+#[ignore]
 async fn mongodb_roundtrip() {
     let store = fresh_store().await;
 

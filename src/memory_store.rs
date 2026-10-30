@@ -105,16 +105,18 @@ impl SessionStore for MemoryStore {
     async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
         let id = Session::id_from_cookie_value(&cookie_value)?;
         tracing::debug!("loading session by id `{}`", id);
-        Ok(self
+        let session = self
             .inner
             .read()
             .await
             .records
             .get(&id)
             .filter(|session| !session.is_expired())
-            .map(Session::snapshot)
-            .and_then(Session::validate)
-            .map(Session::mark_loaded))
+            .map(Session::snapshot);
+        match session {
+            Some(session) => session.validate_loaded(&cookie_value),
+            None => Ok(None),
+        }
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
@@ -255,6 +257,33 @@ impl MemoryStore {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_misbound_record_is_rejected_instead_of_loading_another_identity() -> Result {
+        let store = MemoryStore::new();
+        let first_cookie = store.store_session(Session::new()).await?.unwrap();
+        let first_id = Session::id_from_cookie_value(&first_cookie)?;
+        let mut other = Session::new();
+        other.insert("owner", "other")?;
+        let other_id = other.id().to_owned();
+        let other_cookie = store.store_session(other).await?.unwrap();
+        {
+            let mut state = store.inner.write().await;
+            let wrong = state.records.get(&other_id).unwrap().snapshot();
+            state.insert(first_id, wrong);
+        }
+        assert!(store.load_session(first_cookie).await.is_err());
+        assert_eq!(
+            store
+                .load_session(other_cookie)
+                .await?
+                .unwrap()
+                .get::<String>("owner")
+                .as_deref(),
+            Some("other")
+        );
+        Ok(())
+    }
 
     fn examined(state: &MemoryState) -> usize {
         state

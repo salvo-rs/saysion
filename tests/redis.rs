@@ -26,6 +26,28 @@ async fn fresh_store() -> RedisStore {
 
 #[tokio::test]
 #[ignore]
+async fn redis_rejects_a_valid_blob_bound_to_another_record() {
+    use redis::AsyncCommands;
+
+    let prefix = format!("saysion-binding/{:016x}/", rand::random::<u64>());
+    let store = RedisStore::from_url(&url())
+        .await
+        .unwrap()
+        .with_prefix(&prefix);
+    common::assert_identity_binding(&store, |id, blob| async move {
+        let mut conn = redis::Client::open(url())
+            .unwrap()
+            .get_multiplexed_async_connection()
+            .await
+            .unwrap();
+        let _: () = conn.set(format!("{prefix}{id}"), blob).await.unwrap();
+    })
+    .await;
+    store.clear_store().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
 async fn redis_roundtrip() {
     let store = fresh_store().await;
 
