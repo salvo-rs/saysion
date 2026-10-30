@@ -1,14 +1,14 @@
 # Saysion 会话存储
 
-> **0.3.0 尚未发布（unreleased）。** 本指南描述 Git `main`，不是已发布的 0.2.0。
-> 新 API 要求 Rust 1.95 或更新版本。在 0.3.0 发布前，请使用下面的 Git 依赖。
-> 变更和迁移说明见 [迁移指南](../migration-0.3.md)。
+> 本指南适用于 **saysion 0.4.0**，要求 **Rust 1.95 或更新版本**。
+> 请使用下面的 crates.io 依赖。
+> 变更和迁移说明见 [迁移指南](../migration-0.4.md)。
 
 Saysion 提供多种可插拔的会话存储后端,大多数通过 cargo feature
 启用,你只会拉取实际用到的依赖。
 
-仍依赖 saysion 0.2 的 Salvo 中间件不能直接接收 Git 0.3 的存储类型。
-请先按[中间件兼容矩阵](../migration-0.3.md#salvo-middleware-compatibility)
+仍依赖 saysion 0.2 的 Salvo 中间件不能直接接收 0.4 的存储类型。
+请先按[中间件兼容矩阵](../migration-0.4.md#salvo-middleware-compatibility)
 协调中间件和应用的依赖版本与来源，避免同时引入不兼容的 trait。
 
 | 存储                | Feature 标志     | 后端             |
@@ -75,7 +75,7 @@ async fn main() -> saysion::Result {
 
 ```toml
 [dependencies]
-saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["redis"] }
+saysion = { version = "0.4", features = ["redis"] }
 ```
 
 ```rust
@@ -105,7 +105,7 @@ async fn main() -> saysion::Result {
 
 ```toml
 [dependencies]
-saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["mongodb"] }
+saysion = { version = "0.4", features = ["mongodb"] }
 ```
 
 ```rust
@@ -140,7 +140,7 @@ MongoDB 会自动清理过期会话。
 
 ```toml
 [dependencies]
-saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["sqlx-postgres"] }
+saysion = { version = "0.4", features = ["sqlx-postgres"] }
 # 或者 "sqlx-sqlite", "sqlx-mysql"
 ```
 

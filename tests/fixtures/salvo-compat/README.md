@@ -18,6 +18,6 @@ the actual Cargo target directory before compiling. CI runs the same check.
 
 This fixture models an explicitly coordinated development dependency. The
 upstream middleware still requires 0.2 at the pinned revision; installing it
-unchanged alongside 0.3 is not supported. See the migration guide's compatibility
+unchanged alongside 0.4 is not supported. See the migration guide's compatibility
 matrix. Updating the source pin requires reviewing the upstream dependency/API
 changes and updating its checksum together.

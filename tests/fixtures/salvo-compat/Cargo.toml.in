@@ -8,7 +8,7 @@ publish = false
 [workspace]
 
 [dependencies]
-saysion = { path = "@SAYSION_PATH@", version = "=0.3.0" }
+saysion = { path = "@SAYSION_PATH@", version = "=0.4.0" }
 salvo_core = { version = "=1.0.1", default-features = false, features = ["cookie", "test"] }
 cookie = { version = "0.18", features = ["percent-encode", "signed"] }
 tracing = "0.1"

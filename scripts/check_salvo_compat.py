@@ -1,7 +1,7 @@
 """Test real, pinned Salvo middleware with its saysion dependency aligned.
 
 This stages unchanged upstream Rust source outside the repository. It does not
-claim that the upstream 0.2 dependency already accepts 0.3, or publish a package.
+claim that the upstream 0.2 dependency already accepts 0.4, or publish a package.
 """
 
 import hashlib

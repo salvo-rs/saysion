@@ -122,7 +122,7 @@ jobs:
           components: clippy, rustfmt
       - name: Test release and installation-guide policy offline
         run: python3 -m unittest discover -s scripts -p 'test_release_*.py'
-      - name: Compile an external consumer of the unreleased API
+      - name: Compile an external consumer of the release API
         run: cargo check --manifest-path tests/fixtures/unreleased-consumer/Cargo.toml
       - name: Test real Salvo middleware with an aligned development dependency
         env:

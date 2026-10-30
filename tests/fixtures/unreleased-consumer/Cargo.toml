@@ -8,4 +8,4 @@ publish = false
 [workspace]
 
 [dependencies]
-saysion = { path = "../../..", version = "=0.3.0" }
+saysion = { path = "../../..", version = "=0.4.0" }

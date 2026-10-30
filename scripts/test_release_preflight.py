@@ -23,7 +23,7 @@ class RegistryPreflightTests(unittest.TestCase):
     @patch("release_preflight.urlopen")
     def test_absent_version_is_available(self, request):
         request.side_effect = HTTPError("registry", 404, "not found", {}, None)
-        release_preflight.ensure_unpublished("saysion", "0.3.0")
+        release_preflight.ensure_unpublished("saysion", "0.4.0")
 
     @patch("release_preflight.urlopen")
     def test_registry_errors_do_not_authorize_release(self, request):
@@ -31,24 +31,24 @@ class RegistryPreflightTests(unittest.TestCase):
             with self.subTest(status=status):
                 request.side_effect = HTTPError("registry", status, "failed", {}, None)
                 with self.assertRaisesRegex(RuntimeError, "Cannot confirm"):
-                    release_preflight.ensure_unpublished("saysion", "0.3.0")
+                    release_preflight.ensure_unpublished("saysion", "0.4.0")
 
     @patch("release_preflight.urlopen")
     def test_network_failure_does_not_authorize_release(self, request):
         request.side_effect = URLError("offline")
         with self.assertRaisesRegex(RuntimeError, "Cannot confirm"):
-            release_preflight.ensure_unpublished("saysion", "0.3.0")
+            release_preflight.ensure_unpublished("saysion", "0.4.0")
 
 
 class InstallationGuideTests(unittest.TestCase):
-    def test_unreleased_guides_use_the_repository_source(self):
+    def test_release_guides_use_the_registry_version(self):
         package = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]
-        self.assertEqual(package["version"], "0.3.0")
+        self.assertEqual(package["version"], "0.4.0")
         self.assertEqual(package["rust-version"], "1.95")
-        for guide in ("README.md", "docs/en/stores.md", "docs/zh/stores.md", "docs/migration-0.3.md"):
+        for guide in ("README.md", "docs/en/stores.md", "docs/zh/stores.md", "docs/migration-0.4.md"):
             with self.subTest(guide=guide):
                 text = (ROOT / guide).read_text(encoding="utf-8")
-                self.assertIn("unreleased", text.lower())
+                self.assertNotIn("unreleased", text.lower())
                 dependency_count = 0
                 for block in re.findall(r"```toml\s*\n(.*?)```", text, re.S):
                     dependency = tomllib.loads(block).get("dependencies", {}).get("saysion")
@@ -56,12 +56,13 @@ class InstallationGuideTests(unittest.TestCase):
                         continue
                     dependency_count += 1
                     self.assertIsInstance(dependency, dict)
-                    self.assertEqual(dependency.get("git"), package["repository"])
-                    self.assertEqual(dependency.get("branch"), "main")
-                    self.assertNotIn("version", dependency)
+                    release_series = ".".join(package["version"].split(".")[:2])
+                    self.assertEqual(dependency.get("version"), release_series)
+                    self.assertNotIn("git", dependency)
+                    self.assertNotIn("branch", dependency)
                 self.assertGreater(dependency_count, 0)
 
-    def test_consumer_fixture_checks_this_same_unreleased_package(self):
+    def test_consumer_fixture_checks_this_same_release_package(self):
         package = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]
         manifest_path = ROOT / "tests/fixtures/unreleased-consumer/Cargo.toml"
         fixture = tomllib.loads(manifest_path.read_text())

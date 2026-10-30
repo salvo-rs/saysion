@@ -1,9 +1,9 @@
 # Changelog
 
-## 0.3.0 — Unreleased
+## 0.4.0 — 2026-10-30
 
-This version is not published on crates.io. Use the Git `main` installation in
-the README while evaluating it. Published 0.2.0 does not contain these new APIs.
+This release includes the session persistence and security changes developed
+since 0.2.0. The development version 0.3.0 was not published.
 
 ### Migration and compatibility
 
@@ -34,5 +34,4 @@ the README while evaluating it. Published 0.2.0 does not contain these new APIs.
 - CI runs isolated real-backend contracts, feature combinations, and an external
   consumer. Dependency security floors are part of the published manifest.
 
-See the [0.3 migration guide](docs/migration-0.3.md). Publication and release
-tagging remain separate maintainer actions.
+See the [0.4 migration guide](docs/migration-0.4.md).

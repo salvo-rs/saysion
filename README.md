@@ -26,26 +26,22 @@
 
 *Fork from: https://github.com/http-rs/async-session*
 
-## Installation (0.3.0 unreleased)
+## Installation
 
-The current `main` branch targets **0.3.0**, which has not been published to
-crates.io. It requires **Rust 1.95 or newer**. Published 0.2.0 does not contain
+Saysion **0.4.0** requires **Rust 1.95 or newer**. Version 0.2.0 does not contain
 `SignedCookieStore`, `SessionConflict`, or the new persistence guarantees.
-Use the development source until 0.3.0 is released:
 
-Salvo middleware still depending on saysion 0.2 cannot accept these 0.3 stores.
+Salvo middleware still depending on saysion 0.2 cannot accept these 0.4 stores.
 Coordinate the middleware dependency's version and source first; see the
-[Salvo compatibility matrix](docs/migration-0.3.md#salvo-middleware-compatibility).
+[Salvo compatibility matrix](docs/migration-0.4.md#salvo-middleware-compatibility).
 
 ```toml
 [dependencies]
-saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main" }
+saysion = { version = "0.4" }
 ```
 
-Commit your application's `Cargo.lock` to retain its resolved Git revision;
-update the dependency deliberately when following this moving branch. Add the
-backend feature you need, such as `features = ["redis"]`.
-See the [0.3 migration guide](docs/migration-0.3.md) and [changelog](CHANGELOG.md).
+Add the backend feature you need, such as `features = ["redis"]`.
+See the [0.4 migration guide](docs/migration-0.4.md) and [changelog](CHANGELOG.md).
 
 ## Session stores
 

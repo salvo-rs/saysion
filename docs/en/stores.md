@@ -1,14 +1,13 @@
 # Saysion Session Stores
 
-> **0.3.0 is unreleased.** This guide describes Git `main`, not the published
-> 0.2.0 package. The new APIs require Rust 1.95 or newer. Until 0.3.0 is published,
-> use the Git dependency below. See the [migration guide](../migration-0.3.md).
+> This guide describes **saysion 0.4.0**, requiring **Rust 1.95 or newer**.
+> Use the crates.io dependency below. See the [migration guide](../migration-0.4.md).
 
 Saysion ships with several pluggable session stores. Most are gated
 behind cargo features so you only pull in the dependencies you need.
 
-Salvo middleware using saysion 0.2 cannot accept Git 0.3 stores. Follow the
-[middleware compatibility matrix](../migration-0.3.md#salvo-middleware-compatibility)
+Salvo middleware using saysion 0.2 cannot accept 0.4 stores. Follow the
+[middleware compatibility matrix](../migration-0.4.md#salvo-middleware-compatibility)
 to align both dependency version and source before integrating these stores.
 
 | Store               | Feature flag     | Backend          |
@@ -86,7 +85,7 @@ the HTTP middleware.
 
 ```toml
 [dependencies]
-saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["redis"] }
+saysion = { version = "0.4", features = ["redis"] }
 ```
 
 ```rust
@@ -135,7 +134,7 @@ let store = saysion::RedisStore::new_with_config(
 
 ```toml
 [dependencies]
-saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["mongodb"] }
+saysion = { version = "0.4", features = ["mongodb"] }
 ```
 
 ```rust
@@ -171,7 +170,7 @@ Pick the feature(s) for the database(s) you actually use:
 
 ```toml
 [dependencies]
-saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["sqlx-postgres"] }
+saysion = { version = "0.4", features = ["sqlx-postgres"] }
 # or "sqlx-sqlite", "sqlx-mysql" — multiple are allowed
 ```
 
