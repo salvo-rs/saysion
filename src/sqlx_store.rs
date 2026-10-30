@@ -45,8 +45,8 @@ fn expiry_unix(session: &Session) -> Option<i64> {
     session.expiry().map(|e| e.unix_timestamp())
 }
 
-fn parse_session(json: &str) -> crate::Result<Option<Session>> {
-    Ok(serde_json::from_str::<Session>(json)?.validate())
+fn parse_session(json: &str, cookie_value: &str) -> crate::Result<Option<Session>> {
+    serde_json::from_str::<Session>(json)?.validate_loaded(cookie_value)
 }
 
 // A duplicate identity must never overwrite another session, including when a
@@ -169,11 +169,10 @@ mod pg {
                 .bind(now_unix())
                 .fetch_optional(&self.pool)
                 .await?;
-            Ok(row
-                .map(|(s,)| parse_session(&s))
-                .transpose()?
-                .flatten()
-                .map(Session::mark_loaded))
+            match row {
+                Some((session,)) => parse_session(&session, &cookie_value),
+                None => Ok(None),
+            }
         }
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
@@ -392,11 +391,10 @@ mod sqlite {
                 .bind(now_unix())
                 .fetch_optional(&self.pool)
                 .await?;
-            Ok(row
-                .map(|(s,)| parse_session(&s))
-                .transpose()?
-                .flatten()
-                .map(Session::mark_loaded))
+            match row {
+                Some((session,)) => parse_session(&session, &cookie_value),
+                None => Ok(None),
+            }
         }
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
@@ -587,11 +585,10 @@ mod mysql {
                 .bind(now_unix())
                 .fetch_optional(&self.pool)
                 .await?;
-            Ok(row
-                .map(|(s,)| parse_session(&s))
-                .transpose()?
-                .flatten()
-                .map(Session::mark_loaded))
+            match row {
+                Some((session,)) => parse_session(&session, &cookie_value),
+                None => Ok(None),
+            }
         }
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {

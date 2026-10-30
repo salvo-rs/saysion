@@ -109,12 +109,10 @@ impl SessionStore for RedisStore {
         tracing::debug!("loading session by id `{}`", id);
         let mut conn = self.conn.clone();
         let value: Option<String> = conn.get(self.key(&id)).await?;
-        Ok(match value {
-            None => None,
-            Some(v) => serde_json::from_str::<Session>(&v)?
-                .validate()
-                .map(Session::mark_loaded),
-        })
+        match value {
+            None => Ok(None),
+            Some(v) => serde_json::from_str::<Session>(&v)?.validate_loaded(&cookie_value),
+        }
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {

@@ -22,6 +22,26 @@ async fn fresh_store() -> SqlxSqliteStore {
 }
 
 #[tokio::test]
+async fn sqlite_rejects_a_valid_blob_bound_to_another_record() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    let store = SqlxSqliteStore::new(pool.clone());
+    store.migrate().await.unwrap();
+    common::assert_identity_binding(&store, |id, blob| async move {
+        sqlx::query("UPDATE saysion_sessions SET session = ? WHERE id = ?")
+            .bind(blob)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn sqlite_corrupt_session_is_an_error() {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
