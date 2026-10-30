@@ -14,6 +14,36 @@ The crates.io dependency `saysion = "0.2"` does not provide `SignedCookieStore`,
 `SessionConflict`, or these persistence guarantees. The development manifest
 uses 0.3.0 to distinguish it from the immutable published 0.2.0 version.
 
+## Salvo middleware compatibility
+
+Check the middleware dependency before adding this Git dependency to a Salvo
+application. Salvo's current `saysion = "0.2"` dependency and this unreleased
+0.3 package expose different `SessionStore` traits. Adding a direct 0.3
+dependency does not upgrade the middleware's transitive 0.2 dependency; passing
+a 0.3 `MemoryStore` to that middleware fails to compile.
+
+| Middleware dependency | Application store dependency | Compatibility |
+| --- | --- | --- |
+| registry saysion 0.2 | registry saysion 0.2 | Existing 0.2 API only |
+| registry saysion 0.2 | Git saysion 0.3 | Unsupported: distinct traits |
+| the same Git revision of saysion 0.3 | that Git revision of saysion 0.3 | Coordinated development integration |
+| registry saysion 0.3 | registry saysion 0.3 | Requires future coordinated releases |
+
+For development integration, use a checkout of the Salvo middleware and change
+its workspace `saysion` dependency to **the same Git revision and source** used
+by the application. Point the application at that middleware checkout. Pin the
+revision and commit the application lockfile. This changes the middleware
+dependency requirement as well as the source; a 0.3 `[patch]` alone cannot
+satisfy `^0.2`. A registry package and a Git package can also have different type
+identities even when their version numbers match. Run `cargo tree -d` to inspect
+duplicates. Do not mix the existing 0.2 middleware with 0.3 stores.
+
+CI runs an [actual Salvo middleware integration fixture](../tests/fixtures/salvo-compat/README.md)
+with a pinned upstream source and its dependency explicitly aligned to this
+checkout. It verifies creation, loading and destruction through SessionHandler.
+This is a development compatibility check; it does not upgrade the official
+Salvo dependency or imply that a compatible middleware release is published.
+
 ## Rejected and uncertain writes
 
 Server-side stores create records only from a fresh `Session::new()`. Loaded

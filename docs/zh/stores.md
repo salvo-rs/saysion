@@ -7,6 +7,10 @@
 Saysion 提供多种可插拔的会话存储后端,大多数通过 cargo feature
 启用,你只会拉取实际用到的依赖。
 
+仍依赖 saysion 0.2 的 Salvo 中间件不能直接接收 Git 0.3 的存储类型。
+请先按[中间件兼容矩阵](../migration-0.3.md#salvo-middleware-compatibility)
+协调中间件和应用的依赖版本与来源，避免同时引入不兼容的 trait。
+
 | 存储                | Feature 标志     | 后端             |
 |---------------------|------------------|------------------|
 | `MemoryStore`       | *(始终可用)*     | 进程内内存       |

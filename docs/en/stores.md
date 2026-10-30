@@ -7,6 +7,10 @@
 Saysion ships with several pluggable session stores. Most are gated
 behind cargo features so you only pull in the dependencies you need.
 
+Salvo middleware using saysion 0.2 cannot accept Git 0.3 stores. Follow the
+[middleware compatibility matrix](../migration-0.3.md#salvo-middleware-compatibility)
+to align both dependency version and source before integrating these stores.
+
 | Store               | Feature flag     | Backend          |
 |---------------------|------------------|------------------|
 | `MemoryStore`       | *(always on)*    | In-process       |
