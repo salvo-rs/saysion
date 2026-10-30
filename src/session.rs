@@ -12,6 +12,9 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime as DateTime;
 
+const SERVER_COOKIE_BYTES: usize = 64;
+const SERVER_COOKIE_ENCODED_LEN: usize = SERVER_COOKIE_BYTES.div_ceil(3) * 4;
+
 #[cfg(test)]
 thread_local! {
     pub(crate) static SNAPSHOT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -345,7 +348,7 @@ impl Session {
     /// # }
     /// ```
     pub fn new() -> Self {
-        let cookie_value = generate_cookie(64);
+        let cookie_value = generate_cookie(SERVER_COOKIE_BYTES);
         let id = Session::id_from_cookie_value(&cookie_value).unwrap();
 
         Self {
@@ -365,7 +368,11 @@ impl Session {
     /// applies a cryptographic hash function on a cookie value
     /// returned by [`Session::into_cookie_value`] to obtain the
     /// session id for that cookie. Returns an error if the cookie
-    /// format is not recognized
+    /// format is not recognized. Standard server-side cookies must encode
+    /// exactly 64 bytes as 88 characters of canonical padded Base64. Other
+    /// lengths are rejected before decoding, using a fixed-size stack buffer.
+    /// Client-side [`crate::CookieStore`] and [`crate::SignedCookieStore`] use
+    /// separate, variable-length formats and do not use this parser.
     ///
     /// # Example
     ///
@@ -381,7 +388,21 @@ impl Session {
     /// # }
     /// ```
     pub fn id_from_cookie_value(string: &str) -> Result<String, base64::DecodeError> {
-        let decoded = BASE64_STANDARD.decode(string)?;
+        if string.len() != SERVER_COOKIE_ENCODED_LEN {
+            return Err(base64::DecodeError::InvalidLength(string.len()));
+        }
+        let mut decoded = [0; SERVER_COOKIE_BYTES];
+        let decoded_len = BASE64_STANDARD
+            .decode_slice(string, &mut decoded)
+            .map_err(|error| match error {
+                base64::DecodeSliceError::DecodeError(error) => error,
+                base64::DecodeSliceError::OutputSliceTooSmall => {
+                    base64::DecodeError::InvalidLength(string.len())
+                }
+            })?;
+        if decoded_len != SERVER_COOKIE_BYTES {
+            return Err(base64::DecodeError::InvalidLength(string.len()));
+        }
         let hash = blake3::hash(&decoded);
         Ok(BASE64_STANDARD.encode(hash.as_bytes()))
     }
@@ -611,7 +632,7 @@ impl Session {
         if origin.as_deref() == Some(self.id.as_str()) || self.rotation_from == origin {
             self.rotation_from = origin;
         }
-        let cookie_value = generate_cookie(64);
+        let cookie_value = generate_cookie(SERVER_COOKIE_BYTES);
         self.id = Session::id_from_cookie_value(&cookie_value).unwrap();
         self.cookie_value = Some(cookie_value);
         self.metadata_changed.store(true, Ordering::Release);
