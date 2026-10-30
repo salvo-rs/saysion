@@ -26,6 +26,16 @@ stores must authenticate their own complete format.
 5. After durable success, return `save.complete()`. Only the captured revision
    is acknowledged; later edits remain dirty.
 
+Save handles from one request-local clone family may overlap without blocking
+preparation. Since callback order need not match backend commit order, an
+overlapping cohort remains dirty even after all its successful completions.
+Dropping an unconfirmed handle releases its tracking slot but also keeps the
+family dirty. Once those handles have finished, a standalone confirmed save
+can acknowledge its snapshot normally. Snapshot clones alone do not keep a
+save active. This tracks local acknowledgement uncertainty; it does not fence
+cancelled operations that a remote backend may still execute. Follow the
+backend's transaction/cancellation guarantees when confirming actual state.
+
 Missing sources, removed records and collisions return SessionConflict. Never
 replace those checks with an unconditional upsert. Drop the token on error or
 cancellation. First-insert authority is consumed when preparation starts and is
