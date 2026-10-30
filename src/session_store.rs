@@ -15,6 +15,13 @@ impl std::fmt::Display for SessionConflict {
 impl std::error::Error for SessionConflict {}
 
 /// An async session backend.
+///
+/// External server-side stores can use [`Session::validate_loaded`] after a
+/// trusted lookup and [`Session::prepare_save`] to capture data and persistence
+/// state. [`crate::SessionSave`] supplies the source ID and acknowledges only a
+/// confirmed saved snapshot. [`Session::prepare_delete`] identifies the source
+/// to revoke, including an unsaved rotation. Backend existence and collision
+/// checks must remain atomic; see [`crate::SessionSave::origin`].
 #[async_trait]
 pub trait SessionStore {
     /// Get a session from the storage backend.
