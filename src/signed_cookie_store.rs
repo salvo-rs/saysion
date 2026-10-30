@@ -130,14 +130,16 @@ impl SessionStore for SignedCookieStore {
         // A bounded buffer rejects oversized sessions without allocating an
         // arbitrarily large serialized payload first.
         let mut buffer = vec![0; MAX_BINARY_LEN - TAG_LEN];
-        let payload = postcard::to_slice(&session, &mut buffer)?;
+        let (payload, revision) = session.serialize_bounded(&mut buffer)?;
         let tag = Self::mac(&self.signing_key, payload)
             .finalize()
             .into_bytes();
         let mut bytes = Vec::with_capacity(TAG_LEN + payload.len());
         bytes.extend_from_slice(&tag);
         bytes.extend_from_slice(payload);
-        Ok(Some(format!("{PREFIX}{}", BASE64_STANDARD.encode(bytes))))
+        let cookie = format!("{PREFIX}{}", BASE64_STANDARD.encode(bytes));
+        session.acknowledge_revision(revision);
+        Ok(Some(cookie))
     }
 
     async fn destroy_session(&self, _session: Session) -> Result {
