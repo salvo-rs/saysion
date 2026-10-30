@@ -39,7 +39,16 @@ async fn actual_middleware_accepts_current_store_and_persists_reads_and_destroys
         .send(&service)
         .await;
     assert_eq!(created.status_code.unwrap().as_u16(), 200);
-    let cookie = created.headers().get(SET_COOKIE).unwrap().clone();
+    let cookie = created
+        .headers()
+        .get(SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
     assert_eq!(store.count().await, 1);
     let mut loaded = TestClient::get("http://localhost/read")
         .add_header(COOKIE, cookie.clone(), true)
@@ -50,7 +59,10 @@ async fn actual_middleware_accepts_current_store_and_persists_reads_and_destroys
         .add_header(COOKIE, cookie.clone(), true)
         .send(&service)
         .await;
-    assert!(deleted.headers().contains_key(SET_COOKIE));
+    let removal =
+        cookie::Cookie::parse(deleted.headers().get(SET_COOKIE).unwrap().to_str().unwrap())
+            .unwrap();
+    assert_eq!(removal.max_age().unwrap().whole_seconds(), 0);
     assert_eq!(store.count().await, 0);
     let mut replay = TestClient::get("http://localhost/read")
         .add_header(COOKIE, cookie, true)
