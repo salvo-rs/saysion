@@ -121,6 +121,7 @@ impl SessionStore for MemoryStore {
         tracing::debug!("storing session by id `{}`", session.id());
         let attempt = session.persistence_attempt()?;
         let (snapshot, revision) = session.persistence_snapshot();
+        let mut write = session.begin_backend_write(&attempt.origin, false).await?;
         let mut state = self.inner.write().await;
         let origin = if attempt.origin.is_none() {
             None
@@ -144,6 +145,10 @@ impl SessionStore for MemoryStore {
             return Err(crate::SessionConflict.into());
         }
         state.insert(session.id().to_string(), snapshot.mark_loaded());
+        if let Err(error) = write.finish() {
+            state.remove(session.id());
+            return Err(error);
+        }
         drop(state);
 
         session.mark_persisted();
@@ -153,13 +158,8 @@ impl SessionStore for MemoryStore {
 
     async fn destroy_session(&self, mut session: Session) -> Result {
         tracing::debug!("destroying session by id `{}`", session.id());
-        let origin = session
-            .persistence_origin()
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| session.id().to_owned());
-        session.destroy();
-        self.inner.write().await.remove(&origin);
+        let deletion = session.begin_delete().await?;
+        self.inner.write().await.remove(deletion.id());
         Ok(())
     }
 

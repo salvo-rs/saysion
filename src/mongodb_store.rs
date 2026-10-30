@@ -127,6 +127,7 @@ impl SessionStore for MongoDbStore {
             expires_at,
             session: json,
         };
+        let mut write = session.begin_backend_write(&origin, true).await?;
         if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != id) {
             // Standalone MongoDB has no multi-document transactions. Revoke
             // first, so any failure leaves the old credential unusable.
@@ -153,6 +154,12 @@ impl SessionStore for MongoDbStore {
                 self.coll().insert_one(&doc_value).await?;
             }
         }
+        if let Err(error) = write.finish() {
+            write.require_cleanup();
+            self.coll().delete_one(doc! { "_id": &id }).await?;
+            write.confirm_removed();
+            return Err(error);
+        }
         session.mark_persisted();
         session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
@@ -160,13 +167,10 @@ impl SessionStore for MongoDbStore {
 
     async fn destroy_session(&self, mut session: Session) -> Result {
         tracing::debug!("destroying session by id `{}`", session.id());
-        let origin = session
-            .persistence_origin()
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| session.id().to_owned());
-        session.destroy();
-        self.coll().delete_one(doc! { "_id": origin }).await?;
+        let deletion = session.begin_delete().await?;
+        self.coll()
+            .delete_one(doc! { "_id": deletion.id() })
+            .await?;
         Ok(())
     }
 

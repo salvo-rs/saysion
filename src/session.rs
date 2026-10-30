@@ -99,6 +99,8 @@ pub struct Session {
     #[serde(skip)]
     creation_claimed: Arc<AtomicBool>,
     #[serde(skip)]
+    lifecycle: crate::session_lifecycle::Lifecycle,
+    #[serde(skip)]
     destroy: Arc<AtomicBool>,
 }
 
@@ -126,6 +128,7 @@ impl Clone for Session {
             rotation_from: self.rotation_from.clone(),
             fresh: self.fresh,
             creation_claimed: self.creation_claimed.clone(),
+            lifecycle: self.lifecycle.clone(),
         }
     }
 }
@@ -167,6 +170,7 @@ impl Session {
             rotation_from: None,
             fresh: false,
             creation_claimed: Arc::default(),
+            lifecycle: crate::session_lifecycle::Lifecycle::default(),
             destroy: Arc::new(AtomicBool::new(self.is_destroyed())),
         };
         (snapshot, data.revision)
@@ -247,6 +251,36 @@ impl Session {
         self
     }
 
+    pub(crate) async fn begin_backend_write(
+        &self,
+        origin: &Option<String>,
+        can_outlive_future: bool,
+    ) -> crate::Result<crate::SessionWriteGuard> {
+        self.begin_guarded_write(origin, None, can_outlive_future)
+            .await
+    }
+
+    pub(crate) async fn begin_guarded_write(
+        &self,
+        origin: &Option<String>,
+        receipt: Option<Arc<()>>,
+        can_outlive_future: bool,
+    ) -> crate::Result<crate::SessionWriteGuard> {
+        let can_create = origin.as_deref() != Some(self.id.as_str());
+        let guard = self
+            .lifecycle
+            .write(
+                self.destroy.clone(),
+                receipt,
+                can_create && can_outlive_future,
+            )
+            .await?;
+        if origin.is_some() && self.persistence_origin()? != *origin {
+            return Err(crate::SessionConflict.into());
+        }
+        Ok(guard)
+    }
+
     /// Prepare an immutable snapshot for a server-side store write.
     ///
     /// The returned [`crate::SessionSave`] owns this session and captures its
@@ -274,8 +308,11 @@ impl Session {
     /// A pending, unsaved rotation still deletes its original persisted source.
     /// A superseded clone targets only its own old ID, never a newer clone's
     /// replacement. Callers must delete this ID in the backend and remove the
-    /// browser cookie. This method does not perform storage I/O or revoke every
-    /// descendant of an already completed rotation.
+    /// browser cookie. This synchronous helper only selects an ID; it does not
+    /// wait for an in-flight write. Asynchronous stores must use
+    /// [`Self::begin_delete`] symmetrically with guarded saving instead.
+    /// This method does not perform storage I/O or revoke every descendant of
+    /// an already completed rotation.
     pub fn prepare_delete(&mut self) -> String {
         let target = self
             .persistence_origin()
@@ -284,6 +321,27 @@ impl Session {
             .unwrap_or_else(|| self.id.clone());
         self.destroy();
         target
+    }
+
+    /// Mark destruction, wait for same-lineage writes, and guard backend deletion.
+    ///
+    /// Keep the returned guard alive through the backend delete. A save that is
+    /// already in flight cannot finish after this deletion reports success and
+    /// produce a newly valid record. Earlier creation/rotation with an uncertain
+    /// outcome returns an error; a cancelled network operation is not assumed
+    /// to have been rolled back. Reload confirmed backend state before retrying.
+    /// Independent requests and completed rotation families still require the
+    /// backend existence checks and application-level policies documented by
+    /// [`crate::SessionSave::origin`].
+    pub async fn begin_delete(&mut self) -> crate::Result<crate::SessionDeleteGuard> {
+        self.destroy();
+        let mut guard = self.lifecycle.delete().await?;
+        guard.id = self
+            .persistence_origin()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.id.clone());
+        Ok(guard)
     }
 
     /// Validate a record obtained by a trusted server-side store.
@@ -325,6 +383,7 @@ impl Session {
         self.rotation_from = None;
         self.fresh = false;
         self.creation_claimed = Arc::default();
+        self.lifecycle = crate::session_lifecycle::Lifecycle::default();
         self.destroy = Arc::default();
         Ok(Some(self))
     }
@@ -357,6 +416,7 @@ impl Session {
             rotation_from: None,
             fresh: true,
             creation_claimed: Arc::default(),
+            lifecycle: crate::session_lifecycle::Lifecycle::default(),
             id,
             destroy: Arc::new(AtomicBool::new(false)),
         }

@@ -39,3 +39,18 @@ the store using its cookie, or create a fresh session after authentication;
 never retry the old object as a fresh insertion. A confirmed successful save
 allows its clones to perform conditional updates.
 Deleting a session after an unsaved regeneration targets its persisted source.
+
+Same-lineage asynchronous writes and deletion now hold an asynchronous lifecycle
+guard across backend work. Deletion marks destruction before waiting. A pending
+first write therefore cannot issue a new usable cookie after coordinated
+deletion has completed. Native stores remove a newly written target when
+destruction wins during I/O. MemoryStore uses the same lock order as remote
+stores: lifecycle guard first, store lock second.
+
+An interrupted creation or rotation may have reached the backend. The shared
+lifecycle records this uncertain outcome, and later coordinated deletion of
+that lineage returns an error rather than reporting a guarantee it cannot
+provide. Reload confirmed backend state to resolve it. The public protocol uses
+`SessionSave::begin_write` / `complete_with_guard` and `Session::begin_delete`;
+synchronous ID selection alone does not provide this coordination. No
+synchronous lock is held across backend awaits.

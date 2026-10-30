@@ -183,6 +183,7 @@ mod pg {
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
             let expires = expiry_unix(&snapshot);
+            let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {
                 let mut tx = self.pool.begin().await?;
                 let delete = format!("DELETE FROM {} WHERE id = $1", self.table);
@@ -231,20 +232,25 @@ mod pg {
                     .await
                     .map_err(map_insert_error)?;
             }
+            if let Err(error) = write.finish() {
+                write.require_cleanup();
+                let delete = format!("DELETE FROM {} WHERE id = $1", self.table);
+                sqlx::query(&delete).bind(&id).execute(&self.pool).await?;
+                write.confirm_removed();
+                return Err(error);
+            }
             session.mark_persisted();
             session.acknowledge_revision(revision);
             Ok(session.into_cookie_value())
         }
 
         async fn destroy_session(&self, mut session: Session) -> Result {
-            let origin = session
-                .persistence_origin()
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| session.id().to_owned());
-            session.destroy();
+            let deletion = session.begin_delete().await?;
             let sql = format!("DELETE FROM {} WHERE id = $1", self.table);
-            sqlx::query(&sql).bind(&origin).execute(&self.pool).await?;
+            sqlx::query(&sql)
+                .bind(deletion.id())
+                .execute(&self.pool)
+                .await?;
             Ok(())
         }
 
@@ -406,6 +412,7 @@ mod sqlite {
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
             let expires = expiry_unix(&snapshot);
+            let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {
                 let mut tx = self.pool.begin().await?;
                 let delete = format!("DELETE FROM {} WHERE id = ?", self.table);
@@ -454,20 +461,25 @@ mod sqlite {
                     .await
                     .map_err(map_insert_error)?;
             }
+            if let Err(error) = write.finish() {
+                write.require_cleanup();
+                let delete = format!("DELETE FROM {} WHERE id = ?", self.table);
+                sqlx::query(&delete).bind(&id).execute(&self.pool).await?;
+                write.confirm_removed();
+                return Err(error);
+            }
             session.mark_persisted();
             session.acknowledge_revision(revision);
             Ok(session.into_cookie_value())
         }
 
         async fn destroy_session(&self, mut session: Session) -> Result {
-            let origin = session
-                .persistence_origin()
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| session.id().to_owned());
-            session.destroy();
+            let deletion = session.begin_delete().await?;
             let sql = format!("DELETE FROM {} WHERE id = ?", self.table);
-            sqlx::query(&sql).bind(&origin).execute(&self.pool).await?;
+            sqlx::query(&sql)
+                .bind(deletion.id())
+                .execute(&self.pool)
+                .await?;
             Ok(())
         }
 
@@ -601,6 +613,7 @@ mod mysql {
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
             let expires = expiry_unix(&snapshot);
+            let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {
                 let mut tx = self.pool.begin().await?;
                 let delete = format!("DELETE FROM {} WHERE id = ?", self.table);
@@ -649,20 +662,25 @@ mod mysql {
                     .await
                     .map_err(map_insert_error)?;
             }
+            if let Err(error) = write.finish() {
+                write.require_cleanup();
+                let delete = format!("DELETE FROM {} WHERE id = ?", self.table);
+                sqlx::query(&delete).bind(&id).execute(&self.pool).await?;
+                write.confirm_removed();
+                return Err(error);
+            }
             session.mark_persisted();
             session.acknowledge_revision(revision);
             Ok(session.into_cookie_value())
         }
 
         async fn destroy_session(&self, mut session: Session) -> Result {
-            let origin = session
-                .persistence_origin()
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| session.id().to_owned());
-            session.destroy();
+            let deletion = session.begin_delete().await?;
             let sql = format!("DELETE FROM {} WHERE id = ?", self.table);
-            sqlx::query(&sql).bind(&origin).execute(&self.pool).await?;
+            sqlx::query(&sql)
+                .bind(deletion.id())
+                .execute(&self.pool)
+                .await?;
             Ok(())
         }
 
