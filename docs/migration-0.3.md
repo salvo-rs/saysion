@@ -52,28 +52,15 @@ readable, but deserializing a Session does not establish persistence authority.
 
 Custom stores must capture the exact snapshot they write and acknowledge only
 that successful revision. Calling `reset_data_changed()` after asynchronous I/O
-can erase newer clone edits. Use the public save/load protocol:
+can erase newer clone edits.
 
-1. Consume the input with `Session::prepare_save()` to obtain a `SessionSave`.
-   `session()` exposes its snapshot and `origin()` identifies a persisted source,
-   if present. Preparation claims a fresh session's first attempt.
-2. Under the backend's write lock or transaction, call `validate_current()`
-   before writing. Keep conditional creation/update and rotation atomic in the
-   backend too; this validation is not a replacement for storage conditions.
-3. After durable success, consume the handle with `complete()`. It publishes
-   the saved identity, acknowledges that snapshot, and returns the outgoing
-   cookie, if one is owed. Dropping a failed or cancelled handle does not return
-   first-insert authority.
-
-On load, pass deserialized data to `Session::validate_loaded(cookie_value)` to
-validate the stored ID against the cookie, check expiry, and establish loaded
-persistence state. Do not infer state from an empty or unchanged application
-data map. No public setter grants arbitrary revision or fresh-session authority.
-
-For deletion, call `Session::prepare_delete(&mut self)` and delete the returned
-persisted source ID. This marks the session for destruction, also accepts an
-already marked session, and targets the source of an unsaved rotation. A stale
-clone must not delete another clone's newly persisted identity.
+**Custom-backend protocol support is pending a separate follow-up.** This
+revision does not expose the public snapshot/receipt or trusted-load and
+deletion helpers needed to reproduce the built-in persistence protocol.
+Do not call crate-private persistence methods or assume an existing custom
+SessionStore automatically gains the built-in guarantees. Wait for that
+implementation and its accompanying custom-store guide before adopting its
+protocol. The application and built-in-store guidance above remains applicable.
 
 ## Cookies and stored data
 

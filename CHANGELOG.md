@@ -23,8 +23,6 @@ the README while evaluating it. Published 0.2.0 does not contain these new APIs.
 - `SignedCookieStore` authenticates cookies with HMAC-SHA256 and fallback keys;
   it does not encrypt contents or support server-side revocation.
 - `SessionConflict` reports rejected stale or superseded writes.
-- `SessionSave` and the public prepare/complete and validated-load APIs allow
-  custom stores to participate in the same persistence protocol.
 - Memory loads use independent snapshots; unsaved changes stay request-local.
 - Revision snapshots preserve edits made while asynchronous saves are running.
 - Server-side rotation revokes the original ID; logout rejects late saves.
@@ -33,6 +31,12 @@ the README while evaluating it. Published 0.2.0 does not contain these new APIs.
 - Debug output omits session secrets; SQL deserialization errors propagate.
 - CI runs isolated real-backend contracts, feature combinations, and an external
   consumer. Dependency security floors are part of the published manifest.
+
+### Pending follow-up
+
+- Public custom-backend snapshot, save, validated-load, and deletion protocol
+  helpers are being prepared separately and are not included in this revision.
+  That implementation will provide its own custom-store migration guide.
 
 See the [0.3 migration guide](docs/migration-0.3.md). Publication and release
 tagging remain separate maintainer actions.
