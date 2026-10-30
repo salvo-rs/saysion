@@ -2,7 +2,7 @@
 //!
 //! Enabled by the `redis` cargo feature.
 
-use redis::aio::ConnectionManager;
+use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{AsyncCommands, Client};
 
 use crate::{Result, Session, SessionStore, async_trait};
@@ -47,11 +47,25 @@ impl std::fmt::Debug for RedisStore {
 impl RedisStore {
     /// Create a new `RedisStore` from an existing redis [`Client`].
     pub async fn new(client: Client) -> Result<Self> {
-        let conn = ConnectionManager::new(client).await?;
-        Ok(Self {
+        Self::new_with_config(client, ConnectionManagerConfig::default()).await
+    }
+
+    /// Create a store with explicit connection, response timeout and retry settings.
+    ///
+    /// The default manager has no connection or response timeout. Applications
+    /// should choose deadlines appropriate for their request budget; an outer
+    /// request deadline can also bound the complete operation, including retries.
+    pub async fn new_with_config(client: Client, config: ConnectionManagerConfig) -> Result<Self> {
+        let conn = ConnectionManager::new_with_config(client, config).await?;
+        Ok(Self::from_connection_manager(conn))
+    }
+
+    /// Use an existing manager, preserving its timeout and reconnection settings.
+    pub fn from_connection_manager(conn: ConnectionManager) -> Self {
+        Self {
             conn,
             prefix: DEFAULT_PREFIX.to_string(),
-        })
+        }
     }
 
     /// Connect to redis using a connection URL such as

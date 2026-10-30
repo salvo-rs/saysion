@@ -113,6 +113,24 @@ provides connection pooling and automatic reconnection. Sessions with
 an expiry are stored using `SET ... EX <ttl>` so Redis evicts them
 automatically.
 
+The default Redis connection manager has no connection or response timeout.
+Set both explicitly for your request budget, or pass an existing configured
+manager with `RedisStore::from_connection_manager`. An outer request deadline
+can additionally bound the full operation, including reconnection and retries.
+
+```rust
+use std::time::Duration;
+use redis::aio::ConnectionManagerConfig;
+
+let config = ConnectionManagerConfig::new()
+    .set_connection_timeout(Duration::from_secs(2))
+    .set_response_timeout(Duration::from_millis(250));
+let store = saysion::RedisStore::new_with_config(
+    redis::Client::open("redis://127.0.0.1:6379")?,
+    config,
+).await?;
+```
+
 ## MongoDB
 
 ```toml
