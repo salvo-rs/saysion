@@ -27,12 +27,16 @@ stores must authenticate their own complete format.
 5. Call `save.validate_current()?` inside the write lock or before the write.
    Backend existence and collision checks must still be atomic.
 6. After durable success, if `write.is_destroyed()` is true, remove the written
-   target before completing. This prevents residual records when destruction
-   was marked without a separately scheduled delete.
+   target, call `save.confirm_removed(write)?`, and return a conflict. This
+   explicit confirmation releases waiting deletion without acknowledging data
+   or issuing a cookie. Never confirm removal before its I/O has succeeded.
 7. Return `save.complete_with_guard(write)`. Only the captured revision is
    acknowledged; later edits remain dirty. Destruction requested during the
    write returns an error and never issues a new cookie. Coordinated deletion
-   waits for the write/compensation to finish before reporting success.
+   waits for the write/compensation to finish before reporting success. If
+   destruction arrives between the last pre-check and completion, an unremoved
+   creation/rotation stays uncertain: the waiting delete also returns an error,
+   rather than reporting that a residual target was revoked.
 
 Missing sources, removed records and collisions return SessionConflict. Never
 replace those checks with an unconditional upsert. Drop the token on error or
@@ -51,6 +55,14 @@ availability for a truthful completion result. Reload actual, confirmed backend
 state using the cookie or authenticate again. A normal existing-record update
 cannot recreate a deleted row and does not require this creation uncertainty
 fence. None of this coordinates independently loaded requests across processes.
+
+Native asynchronous stores use the same conservative rule for a failed guarded
+creation or rotation, including reported collisions or a transaction later
+rolled back. They do not currently classify every backend error as proof that
+no write can remain in flight. A same-lineage logout may therefore return an
+error after a known rejection; reload trusted backend state rather than
+weakening the uncertainty fence. Pure in-memory writes cannot outlive their
+cancelled future and do not need that additional uncertainty flag.
 
 ## Deletion
 

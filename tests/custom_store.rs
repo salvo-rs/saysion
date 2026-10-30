@@ -59,6 +59,8 @@ impl SessionStore for CustomStore {
         }
         if write.is_destroyed() {
             self.records.lock().unwrap().remove(save.session().id());
+            save.confirm_removed(write)?;
+            return Err(SessionConflict.into());
         }
         save.complete_with_guard(write)
     }
@@ -162,6 +164,52 @@ async fn a_write_guard_cannot_confirm_another_save_token() -> Result {
     let write = first.begin_write().await?;
     let error = second.complete_with_guard(write).unwrap_err();
     assert!(error.downcast_ref::<SessionConflict>().is_some());
+    Ok(())
+}
+
+#[test]
+fn legacy_completion_withholds_a_destroyed_new_session_and_keeps_it_dirty() -> Result {
+    let mut session = Session::new();
+    session.insert("value", true)?;
+    let mut observer = session.clone();
+    let save = session.prepare_save()?;
+    observer.destroy();
+    assert!(save.complete().is_none());
+    assert!(observer.data_changed());
+    Ok(())
+}
+
+#[tokio::test]
+async fn destruction_between_the_precheck_and_completion_does_not_confirm_removal() -> Result {
+    let store = CustomStore::default();
+    let cookie = store.store_session(Session::new()).await?.unwrap();
+    let mut rotating = store.load_session(cookie).await?.unwrap();
+    rotating.regenerate();
+    let logout = rotating.clone();
+    let save = rotating.prepare_save()?;
+    let write = save.begin_write().await?;
+    let target = save.session().id().to_owned();
+    {
+        let mut records = store.records.lock().unwrap();
+        records.remove(save.origin().unwrap());
+        records.insert(target.clone(), serde_json::to_string(save.session())?);
+    }
+    assert!(!write.is_destroyed());
+    let mut deletion = Box::pin(store.destroy_session(logout));
+    poll_fn(|cx| match deletion.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(_) => panic!("deletion must wait for write completion"),
+    })
+    .await;
+    // Destruction has now arrived after the store's last pre-check. Completing
+    // must not pretend the replacement was removed just because I/O succeeded.
+    let error = save.complete_with_guard(write).unwrap_err();
+    assert!(error.downcast_ref::<SessionConflict>().is_some());
+    let error = tokio::time::timeout(std::time::Duration::from_secs(5), deletion)
+        .await?
+        .unwrap_err();
+    assert!(error.downcast_ref::<SessionConflict>().is_some());
+    assert!(store.records.lock().unwrap().contains_key(&target));
     Ok(())
 }
 
