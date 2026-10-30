@@ -47,7 +47,8 @@ impl SessionSnapshot {
 /// An immutable server-side save snapshot and its opaque completion token.
 ///
 /// Obtain this with [`Session::prepare_save`], serialize [`Self::session`] before
-/// I/O, and call [`Self::complete`] only after the backend confirms success.
+/// I/O, acquire [`Self::begin_write`] before asynchronous backend work, and call
+/// [`Self::complete_with_guard`] only after the backend confirms success.
 /// Completion acknowledges only the captured data, preserving later clone edits.
 /// This type cannot be cloned, and its revision cannot be changed by a store.
 ///
@@ -65,6 +66,8 @@ pub struct SessionSave {
     snapshot: SessionSnapshot,
     revision: crate::session::SaveRevision,
     origin: Option<String>,
+    write_receipt: std::sync::Arc<()>,
+    write_started: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for SessionSave {
@@ -84,6 +87,8 @@ impl SessionSave {
             snapshot,
             revision,
             origin: attempt.origin,
+            write_receipt: std::sync::Arc::new(()),
+            write_started: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -112,6 +117,67 @@ impl SessionSave {
         self.origin.as_deref()
     }
 
+    /// Acquire same-lineage write coordination before starting backend I/O.
+    ///
+    /// Hold this owned asynchronous guard through the write, then pass it to
+    /// [`Self::complete_with_guard`]. Deletion must symmetrically use
+    /// [`Session::begin_delete`]. A save token permits only one guarded attempt.
+    /// Dropping a creation/rotation guard without confirmation conservatively
+    /// makes subsequent coordinated deletion fail, since a network write may
+    /// still complete. No synchronous mutex is held across an await.
+    pub async fn begin_write(&self) -> Result<crate::SessionWriteGuard> {
+        self.write_started
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .map_err(|_| SessionConflict)?;
+        self.source
+            .begin_guarded_write(&self.origin, Some(self.write_receipt.clone()), true)
+            .await
+    }
+
+    /// Complete a successful guarded write, consuming its matching guard.
+    ///
+    /// Destruction requested during I/O prevents acknowledgment and cookie
+    /// issuance. If [`crate::SessionWriteGuard::is_destroyed`] is true after the
+    /// write, remove the written target and use [`Self::confirm_removed`]. If
+    /// destruction races with this completion after an earlier false check,
+    /// the unremoved creation/rotation remains uncertain and a waiting deletion
+    /// cannot claim success. A pre-check alone is not a compensation receipt.
+    pub fn complete_with_guard(
+        self,
+        mut guard: crate::SessionWriteGuard,
+    ) -> Result<Option<String>> {
+        if !guard.matches(&self.write_receipt) {
+            return Err(SessionConflict.into());
+        }
+        if let Err(error) = guard.finish() {
+            guard.require_cleanup();
+            return Err(error);
+        }
+        self.source.mark_persisted();
+        self.source.acknowledge_revision(self.revision);
+        Ok(self.source.into_cookie_value())
+    }
+
+    /// Confirm that the backend removed this write's target before releasing it.
+    ///
+    /// Call only after compensating deletion has completed successfully, using
+    /// the matching guard. This releases a waiting coordinated deletion without
+    /// acknowledging saved data or issuing a cookie. On a removal error or
+    /// cancellation, drop the guard instead, preserving the uncertainty fence.
+    /// This does not refund creation authority or confirm a normal saved session.
+    pub fn confirm_removed(self, mut guard: crate::SessionWriteGuard) -> Result {
+        if !guard.matches(&self.write_receipt) {
+            return Err(SessionConflict.into());
+        }
+        guard.confirm_removed();
+        Ok(())
+    }
+
     /// Recheck request-local destruction and rotation before writing.
     ///
     /// In a lock-based store, call this inside the lock used for the write.
@@ -131,13 +197,24 @@ impl SessionSave {
     /// Acknowledge a confirmed backend write and return the outgoing cookie.
     ///
     /// Call only after a successful insertion, conditional update, or committed
-    /// rotation. On an error or cancellation, drop the save instead. Later data
+    /// rotation. This compatibility method is for stores that supply their own
+    /// write/deletion coordination. Asynchronous stores should instead use
+    /// [`Self::begin_write`] and [`Self::complete_with_guard`]. A destroyed
+    /// session, or a token that began the guarded protocol, is not acknowledged
+    /// and returns no cookie here. On an error or cancellation, drop the save instead. Later data
     /// edits through a clone remain dirty. Completing an older update cannot
     /// roll back a newer request-local identity marker.
     /// Overlapping saves conservatively remain dirty regardless of completion
     /// order; after all handles finish, a standalone successful save can clear
     /// that uncertainty.
     pub fn complete(self) -> Option<String> {
+        if self.source.is_destroyed()
+            || self
+                .write_started
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return None;
+        }
         self.source.mark_persisted();
         self.source.acknowledge_revision(self.revision);
         self.source.into_cookie_value()

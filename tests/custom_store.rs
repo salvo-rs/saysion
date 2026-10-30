@@ -31,15 +31,19 @@ impl SessionStore for CustomStore {
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
         let save = session.prepare_save()?;
+        let write = save.begin_write().await?;
         let encoded = serde_json::to_string(save.session())?;
+        save.validate_current()?;
         if let Some(gate) = &self.gate {
+            // Model an asynchronous backend operation already accepted before
+            // its completion is released. Lifecycle coordination must also
+            // handle destruction arriving during this interval.
             gate.captured.notify_one();
             gate.resume.notified().await;
         }
         let id = save.session().id().to_owned();
         {
             let mut records = self.records.lock().unwrap();
-            save.validate_current()?;
             if let Some(origin) = save.origin()
                 && !records.contains_key(origin)
             {
@@ -53,12 +57,17 @@ impl SessionStore for CustomStore {
             }
             records.insert(id, encoded);
         }
-        Ok(save.complete())
+        if write.is_destroyed() {
+            self.records.lock().unwrap().remove(save.session().id());
+            save.confirm_removed(write)?;
+            return Err(SessionConflict.into());
+        }
+        save.complete_with_guard(write)
     }
 
     async fn destroy_session(&self, mut session: Session) -> Result {
-        let source = session.prepare_delete();
-        self.records.lock().unwrap().remove(&source);
+        let deletion = session.begin_delete().await?;
+        self.records.lock().unwrap().remove(deletion.id());
         Ok(())
     }
 
@@ -66,6 +75,142 @@ impl SessionStore for CustomStore {
         self.records.lock().unwrap().clear();
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn same_lineage_deletion_waits_for_an_accepted_first_write() -> Result {
+    let gate = Arc::new(Gate::default());
+    let store = CustomStore {
+        gate: Some(gate.clone()),
+        ..CustomStore::default()
+    };
+    let mut session = Session::new();
+    session.insert("value", 42_u64)?;
+    let logout = session.clone();
+    let observer = session.clone();
+    let mut save = Box::pin(store.store_session(session));
+    poll_fn(|cx| match save.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(_) => panic!("save did not wait for completion"),
+    })
+    .await;
+    let mut deletion = Box::pin(store.destroy_session(logout));
+    poll_fn(|cx| match deletion.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(_) => panic!("deletion must wait for the accepted write"),
+    })
+    .await;
+    assert!(observer.is_destroyed());
+    gate.resume.notify_one();
+    let (saved, deleted) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(save, deletion)
+    })
+    .await?;
+    assert!(
+        saved
+            .unwrap_err()
+            .downcast_ref::<SessionConflict>()
+            .is_some()
+    );
+    deleted?;
+    assert!(store.records.lock().unwrap().is_empty());
+    assert!(observer.data_changed());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelling_a_guard_before_io_does_not_promise_successful_deletion() -> Result {
+    let session = Session::new();
+    let mut observer = session.clone();
+    let save = session.prepare_save()?;
+    let write = save.begin_write().await?;
+    drop(write);
+    drop(save);
+    // The generic public protocol cannot determine whether I/O was dispatched.
+    let error = observer.begin_delete().await.unwrap_err();
+    assert!(error.downcast_ref::<SessionConflict>().is_some());
+    assert!(observer.is_destroyed());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelling_after_a_mock_write_requires_reloading_confirmed_state() -> Result {
+    let store = CustomStore::default();
+    let session = Session::new();
+    let mut observer = session.clone();
+    let writer = session.clone();
+    let cookie = session.into_cookie_value().unwrap();
+    let save = writer.prepare_save()?;
+    let write = save.begin_write().await?;
+    store.records.lock().unwrap().insert(
+        save.session().id().to_owned(),
+        serde_json::to_string(save.session())?,
+    );
+    drop(write);
+    drop(save);
+    assert!(observer.begin_delete().await.is_err());
+    assert_eq!(store.records.lock().unwrap().len(), 1);
+    // A trusted lookup creates an isolated lifecycle for the confirmed record.
+    let confirmed = store.load_session(cookie).await?.unwrap();
+    store.destroy_session(confirmed).await?;
+    assert!(store.records.lock().unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_write_guard_cannot_confirm_another_save_token() -> Result {
+    let first = Session::new().prepare_save()?;
+    let second = Session::new().prepare_save()?;
+    let write = first.begin_write().await?;
+    let error = second.complete_with_guard(write).unwrap_err();
+    assert!(error.downcast_ref::<SessionConflict>().is_some());
+    Ok(())
+}
+
+#[test]
+fn legacy_completion_withholds_a_destroyed_new_session_and_keeps_it_dirty() -> Result {
+    let mut session = Session::new();
+    session.insert("value", true)?;
+    let mut observer = session.clone();
+    let save = session.prepare_save()?;
+    observer.destroy();
+    assert!(save.complete().is_none());
+    assert!(observer.data_changed());
+    Ok(())
+}
+
+#[tokio::test]
+async fn destruction_between_the_precheck_and_completion_does_not_confirm_removal() -> Result {
+    let store = CustomStore::default();
+    let cookie = store.store_session(Session::new()).await?.unwrap();
+    let mut rotating = store.load_session(cookie).await?.unwrap();
+    rotating.regenerate();
+    let logout = rotating.clone();
+    let save = rotating.prepare_save()?;
+    let write = save.begin_write().await?;
+    let target = save.session().id().to_owned();
+    {
+        let mut records = store.records.lock().unwrap();
+        records.remove(save.origin().unwrap());
+        records.insert(target.clone(), serde_json::to_string(save.session())?);
+    }
+    assert!(!write.is_destroyed());
+    let mut deletion = Box::pin(store.destroy_session(logout));
+    poll_fn(|cx| match deletion.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(_) => panic!("deletion must wait for write completion"),
+    })
+    .await;
+    // Destruction has now arrived after the store's last pre-check. Completing
+    // must not pretend the replacement was removed just because I/O succeeded.
+    let error = save.complete_with_guard(write).unwrap_err();
+    assert!(error.downcast_ref::<SessionConflict>().is_some());
+    let error = tokio::time::timeout(std::time::Duration::from_secs(5), deletion)
+        .await?
+        .unwrap_err();
+    assert!(error.downcast_ref::<SessionConflict>().is_some());
+    assert!(store.records.lock().unwrap().contains_key(&target));
+    Ok(())
 }
 
 #[tokio::test]

@@ -139,6 +139,7 @@ impl SessionStore for RedisStore {
         }
         let (snapshot, revision) = session.persistence_snapshot();
         let json = serde_json::to_string(&snapshot)?;
+        let mut write = session.begin_backend_write(&origin, true).await?;
         let mut conn = self.conn.clone();
         if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != id) {
             let ttl = match snapshot.expiry() {
@@ -147,6 +148,7 @@ impl SessionStore for RedisStore {
                         // Expired rotations revoke the source without creating
                         // a permanent replacement for an already-expired session.
                         let _: () = conn.del(self.key(old_id)).await?;
+                        write.finish()?;
                         return Ok(None);
                     };
                     ttl_millis(ttl)?
@@ -178,6 +180,12 @@ impl SessionStore for RedisStore {
             if rotated == 0 {
                 return Err(crate::SessionConflict.into());
             }
+            if let Err(error) = write.finish() {
+                write.require_cleanup();
+                let _: () = conn.del(self.key(&id)).await?;
+                write.confirm_removed();
+                return Err(error);
+            }
             session.mark_persisted();
             session.acknowledge_revision(revision);
             return Ok(session.into_cookie_value());
@@ -187,6 +195,7 @@ impl SessionStore for RedisStore {
         let ttl = snapshot.expires_in();
         if snapshot.expiry().is_some() && ttl.is_none() {
             let _: () = conn.del(self.key(&id)).await?;
+            write.finish()?;
             return Ok(None);
         }
         if let Some(ttl) = ttl {
@@ -198,6 +207,12 @@ impl SessionStore for RedisStore {
         if saved.is_none() {
             return Err(crate::SessionConflict.into());
         }
+        if let Err(error) = write.finish() {
+            write.require_cleanup();
+            let _: () = conn.del(self.key(&id)).await?;
+            write.confirm_removed();
+            return Err(error);
+        }
         session.mark_persisted();
         session.acknowledge_revision(revision);
         Ok(session.into_cookie_value())
@@ -205,14 +220,9 @@ impl SessionStore for RedisStore {
 
     async fn destroy_session(&self, mut session: Session) -> Result {
         tracing::debug!("destroying session by id `{}`", session.id());
-        let origin = session
-            .persistence_origin()
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| session.id().to_owned());
-        session.destroy();
+        let deletion = session.begin_delete().await?;
         let mut conn = self.conn.clone();
-        let _: () = conn.del(self.key(&origin)).await?;
+        let _: () = conn.del(self.key(deletion.id())).await?;
         Ok(())
     }
 

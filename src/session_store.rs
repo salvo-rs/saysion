@@ -19,8 +19,10 @@ impl std::error::Error for SessionConflict {}
 /// External server-side stores can use [`Session::validate_loaded`] after a
 /// trusted lookup and [`Session::prepare_save`] to capture data and persistence
 /// state. [`crate::SessionSave`] supplies the source ID and acknowledges only a
-/// confirmed saved snapshot. [`Session::prepare_delete`] identifies the source
-/// to revoke, including an unsaved rotation. Backend existence and collision
+/// confirmed saved snapshot. Use [`crate::SessionSave::begin_write`] and
+/// [`Session::begin_delete`] symmetrically around asynchronous backend I/O.
+/// Deletion identifies the source to revoke, including an unsaved rotation.
+/// Backend existence and collision
 /// checks must remain atomic; see [`crate::SessionSave::origin`].
 #[async_trait]
 pub trait SessionStore {
