@@ -52,6 +52,24 @@ async fn fresh_store() -> TestStore {
 
 #[tokio::test]
 #[ignore]
+async fn pg_rejects_a_valid_blob_bound_to_another_record() {
+    let store = fresh_store().await;
+    let pool = store.pool.clone();
+    let table = store.table.clone();
+    common::assert_identity_binding(&*store, |id, blob| async move {
+        sqlx::query(&format!("UPDATE {table} SET session = $1 WHERE id = $2"))
+            .bind(blob)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    })
+    .await;
+    store.finish().await;
+}
+
+#[tokio::test]
+#[ignore]
 async fn pg_roundtrip() {
     let store = fresh_store().await;
 
