@@ -27,6 +27,68 @@ struct SessionData {
     revision: u64,
     #[serde(skip)]
     persisted_revision: u64,
+    #[serde(skip)]
+    active_saves: usize,
+    #[serde(skip)]
+    overlapping_saves: bool,
+    #[serde(skip)]
+    uncertain_save: bool,
+}
+
+/// One captured save's acknowledgement and cancellation bookkeeping.
+///
+/// Data and this state share a lock. Once saves overlap, callback order cannot
+/// identify the last backend write, so the entire cohort stays dirty. A later
+/// standalone confirmed save can acknowledge its snapshot normally.
+pub(crate) struct SaveRevision {
+    data: Option<Arc<RwLock<SessionData>>>,
+    revision: u64,
+}
+
+impl std::fmt::Debug for SaveRevision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SaveRevision").finish_non_exhaustive()
+    }
+}
+
+impl SaveRevision {
+    fn capture(shared: &Arc<RwLock<SessionData>>, data: &mut SessionData) -> Self {
+        if data.active_saves == 0 {
+            data.overlapping_saves = false;
+        } else {
+            data.overlapping_saves = true;
+            data.uncertain_save = true;
+        }
+        data.active_saves += 1;
+        Self {
+            data: Some(shared.clone()),
+            revision: data.revision,
+        }
+    }
+
+    fn acknowledge(mut self) {
+        let shared = self.data.take().expect("save revision already completed");
+        let mut data = shared.write().unwrap();
+        if data.overlapping_saves {
+            data.uncertain_save = true;
+        } else {
+            data.persisted_revision = self.revision;
+            data.uncertain_save = false;
+        }
+        data.active_saves -= 1;
+    }
+}
+
+impl Drop for SaveRevision {
+    fn drop(&mut self) {
+        if let Some(shared) = self.data.take() {
+            // A failed/cancelled save may have reached the backend. Do not
+            // acknowledge it, and never strand the cohort's active count.
+            let mut data = shared.write().unwrap_or_else(|error| error.into_inner());
+            data.uncertain_save = true;
+            data.active_saves -= 1;
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -49,6 +111,9 @@ pub(crate) struct PersistenceAttempt {
 /// Changes made through a request-local clone while a save awaits I/O remain
 /// dirty. [`Session::reset_data_changed`] explicitly acknowledges the current
 /// data and must not be used to acknowledge an older asynchronous save.
+/// Overlapping or unconfirmed saves conservatively keep their shared data
+/// dirty until a later standalone save succeeds (or the caller explicitly
+/// resets change tracking).
 ///
 /// ### Change tracking example
 /// ```rust
@@ -148,17 +213,16 @@ impl Session {
     pub(crate) fn snapshot(&self) -> Self {
         #[cfg(test)]
         SNAPSHOT_CALLS.with(|calls| calls.set(calls.get() + 1));
-        self.persistence_snapshot().0
+        let data = self.data.read().unwrap();
+        self.snapshot_values(data.values.clone())
     }
 
-    /// Capture data and its revision under the same lock before starting I/O.
-    pub(crate) fn persistence_snapshot(&self) -> (Self, u64) {
-        let data = self.data.read().unwrap();
-        let snapshot = Self {
+    fn snapshot_values(&self, values: HashMap<String, String>) -> Self {
+        Self {
             id: self.id.clone(),
             expiry: self.expiry,
             data: Arc::new(RwLock::new(SessionData {
-                values: data.values.clone(),
+                values,
                 ..SessionData::default()
             })),
             cookie_value: None,
@@ -168,8 +232,15 @@ impl Session {
             fresh: false,
             creation_claimed: Arc::default(),
             destroy: Arc::new(AtomicBool::new(self.is_destroyed())),
-        };
-        (snapshot, data.revision)
+        }
+    }
+
+    /// Capture data and a tracked revision before starting I/O.
+    pub(crate) fn persistence_snapshot(&self) -> (Self, SaveRevision) {
+        let mut data = self.data.write().unwrap();
+        let snapshot = self.snapshot_values(data.values.clone());
+        let revision = SaveRevision::capture(&self.data, &mut data);
+        (snapshot, revision)
     }
 
     /// Encode one bounded data snapshot together with its revision. Borrowing
@@ -178,7 +249,7 @@ impl Session {
     pub(crate) fn serialize_bounded<'buffer>(
         &self,
         buffer: &'buffer mut [u8],
-    ) -> Result<(&'buffer mut [u8], u64), postcard::Error> {
+    ) -> Result<(&'buffer mut [u8], SaveRevision), postcard::Error> {
         #[derive(Serialize)]
         struct WireSession<'a> {
             id: &'a str,
@@ -186,19 +257,20 @@ impl Session {
             data: &'a HashMap<String, String>,
         }
 
-        let data = self.data.read().unwrap();
+        let mut data = self.data.write().unwrap();
         let wire = WireSession {
             id: &self.id,
             expiry: self.expiry,
             data: &data.values,
         };
         let payload = postcard::to_slice(&wire, buffer)?;
-        Ok((payload, data.revision))
+        let revision = SaveRevision::capture(&self.data, &mut data);
+        Ok((payload, revision))
     }
 
     /// Acknowledge only the data represented by a successfully saved snapshot.
-    pub(crate) fn acknowledge_revision(&self, revision: u64) {
-        self.data.write().unwrap().persisted_revision = revision;
+    pub(crate) fn acknowledge_revision(&self, revision: SaveRevision) {
+        revision.acknowledge();
         self.metadata_changed.store(false, Ordering::Release);
     }
 
@@ -261,12 +333,12 @@ impl Session {
         crate::SessionSave::new(self)
     }
 
-    pub(crate) fn immutable_snapshot(&self) -> (crate::SessionSnapshot, u64) {
-        let data = self.data.read().unwrap();
-        (
-            crate::SessionSnapshot::new(self.id.clone(), self.expiry, data.values.clone()),
-            data.revision,
-        )
+    pub(crate) fn immutable_snapshot(&self) -> (crate::SessionSnapshot, SaveRevision) {
+        let mut data = self.data.write().unwrap();
+        let snapshot =
+            crate::SessionSnapshot::new(self.id.clone(), self.expiry, data.values.clone());
+        let revision = SaveRevision::capture(&self.data, &mut data);
+        (snapshot, revision)
     }
 
     /// Mark this session for destruction and return its persisted deletion ID.
@@ -318,6 +390,8 @@ impl Session {
         } else {
             let mut data = self.data.write().unwrap();
             data.persisted_revision = data.revision;
+            data.uncertain_save = false;
+            data.overlapping_saves = false;
         }
         self.cookie_value = None;
         self.metadata_changed = AtomicBool::new(false);
@@ -776,7 +850,7 @@ impl Session {
             return true;
         }
         let data = self.data.read().unwrap();
-        data.revision != data.persisted_revision
+        data.uncertain_save || data.revision != data.persisted_revision
     }
 
     /// Whether this session has changes to save or is marked for destruction.
@@ -793,6 +867,10 @@ impl Session {
     /// the exact snapshot they persisted, so edits made during I/O stay dirty.
     /// Custom stores must not call this after asynchronous I/O when clones may
     /// have modified the session in the meantime.
+    ///
+    /// This explicit override also clears current persistence uncertainty.
+    /// Completing or dropping an overlapping save afterward can mark the data
+    /// dirty again; use a standalone confirmed save for normal recovery.
     ///
     /// # Example
     ///
@@ -814,6 +892,7 @@ impl Session {
     pub fn reset_data_changed(&self) {
         let mut data = self.data.write().unwrap();
         data.persisted_revision = data.revision;
+        data.uncertain_save = false;
         self.metadata_changed.store(false, Ordering::Release);
     }
 
@@ -945,6 +1024,38 @@ mod read_tests {
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+
+    #[test]
+    fn native_and_bounded_capture_paths_share_overlap_tracking() {
+        let mut session = Session::new();
+        session.insert("value", 1_u32).unwrap();
+        session.reset_data_changed();
+        let (_, native) = session.persistence_snapshot();
+        let mut buffer = [0; 1_024];
+        let (_, bounded) = session.serialize_bounded(&mut buffer).unwrap();
+        session.acknowledge_revision(native);
+        session.acknowledge_revision(bounded);
+        assert!(session.data_changed());
+        let passive = session.snapshot();
+        assert!(!passive.data_changed());
+        let (_, repair) = session.persistence_snapshot();
+        session.acknowledge_revision(repair);
+        assert!(!session.data_changed());
+        drop(passive);
+        assert!(!session.data_changed());
+    }
+
+    #[test]
+    fn bounded_failure_before_capture_does_not_create_a_pending_save() {
+        let mut session = Session::new();
+        session.insert("value", 1_u32).unwrap();
+        session.reset_data_changed();
+        assert!(session.serialize_bounded(&mut [0; 1]).is_err());
+        assert!(!session.data_changed());
+        let (_, repair) = session.persistence_snapshot();
+        session.acknowledge_revision(repair);
+        assert!(!session.data_changed());
+    }
 
     #[test]
     fn bounded_serialization_captures_the_wire_data_and_revision_together() {
