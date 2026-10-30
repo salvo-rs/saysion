@@ -1,5 +1,9 @@
 # Saysion 会话存储
 
+> **0.3.0 尚未发布（unreleased）。** 本指南描述 Git `main`，不是已发布的 0.2.0。
+> 新 API 要求 Rust 1.95 或更新版本。在 0.3.0 发布前，请使用下面的 Git 依赖。
+> 变更和迁移说明见 [迁移指南](../migration-0.3.md)。
+
 Saysion 提供多种可插拔的会话存储后端,大多数通过 cargo feature
 启用,你只会拉取实际用到的依赖。
 
@@ -67,7 +71,7 @@ async fn main() -> saysion::Result {
 
 ```toml
 [dependencies]
-saysion = { version = "0.2", features = ["redis"] }
+saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["redis"] }
 ```
 
 ```rust
@@ -97,7 +101,7 @@ async fn main() -> saysion::Result {
 
 ```toml
 [dependencies]
-saysion = { version = "0.2", features = ["mongodb"] }
+saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["mongodb"] }
 ```
 
 ```rust
@@ -132,7 +136,7 @@ MongoDB 会自动清理过期会话。
 
 ```toml
 [dependencies]
-saysion = { version = "0.2", features = ["sqlx-postgres"] }
+saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main", features = ["sqlx-postgres"] }
 # 或者 "sqlx-sqlite", "sqlx-mysql"
 ```
 

@@ -46,6 +46,9 @@ jobs:
           fi
         if: startsWith(github.ref, 'refs/tags/v')
 
+      - name: Reject an already published crate version
+        run: python3 scripts/release_preflight.py
+
       - name: Check all targets and features
         run: cargo check --all-targets --all-features
 

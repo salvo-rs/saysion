@@ -1,0 +1,11 @@
+[package]
+name = "saysion-unreleased-consumer"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace]
+
+[dependencies]
+saysion = { path = "../../..", version = "=0.3.0" }

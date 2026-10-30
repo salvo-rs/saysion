@@ -120,6 +120,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: clippy, rustfmt
+      - name: Test release and installation-guide policy offline
+        run: python3 -m unittest discover -s scripts -p 'test_release_*.py'
+      - name: Compile an external consumer of the unreleased API
+        run: cargo check --manifest-path tests/fixtures/unreleased-consumer/Cargo.toml
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
