@@ -1,6 +1,27 @@
 use saysion::{
-    Session, SessionConflict, SessionSave, SessionSnapshot, SessionStore, SignedCookieStore,
+    Session, SessionConflict, SessionDeleteGuard, SessionSave, SessionSnapshot, SessionStore,
+    SessionWriteGuard, SignedCookieStore,
 };
+
+// Type-check the asynchronous coordination API without driving any future or
+// pretending to perform a backend write/deletion in this consumer fixture.
+async fn typecheck_guarded_write(save: SessionSave) -> saysion::Result {
+    let write: SessionWriteGuard = save.begin_write().await?;
+    let _destroyed = write.is_destroyed();
+    let _complete: fn(SessionSave, SessionWriteGuard) -> saysion::Result<Option<String>> =
+        SessionSave::complete_with_guard;
+    let _removed: fn(SessionSave, SessionWriteGuard) -> saysion::Result =
+        SessionSave::confirm_removed;
+    drop(write);
+    drop(save);
+    Ok(())
+}
+
+async fn typecheck_guarded_delete(mut session: Session) -> saysion::Result {
+    let deletion: SessionDeleteGuard = session.begin_delete().await?;
+    let _target: &str = deletion.id();
+    Ok(())
+}
 
 fn main() -> saysion::Result {
     let store = SignedCookieStore::new([42; 32])?;
@@ -23,5 +44,6 @@ fn main() -> saysion::Result {
     let _complete: fn(SessionSave) -> Option<String> = SessionSave::complete;
     let _load: fn(Session, &str) -> saysion::Result<Option<Session>> = Session::validate_loaded;
     let _delete: fn(&mut Session) -> String = Session::prepare_delete;
+    let _guarded_protocol = (typecheck_guarded_write, typecheck_guarded_delete);
     Ok(())
 }

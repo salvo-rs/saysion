@@ -59,19 +59,36 @@ Use the [public custom-store protocol](custom-stores.md):
 1. Consume the input with `session.prepare_save()?` to obtain a `SessionSave`.
    Its `session()` is a read-only `SessionSnapshot`; cloning it cannot mutate
    the pending save. `origin()` identifies a persisted source, if present.
-2. Call `save.validate_current()?` under the backend write lock or before the
+2. Acquire `let write = save.begin_write().await?` before backend I/O, and keep
+   the asynchronous guard through the write and its completion.
+3. Call `save.validate_current()?` under the backend write lock or before the
    write, and use atomic backend existence and collision checks as described
    in the custom-store guide. This validation alone is not a storage lock.
-3. After durable success, call `save.complete()` to acknowledge the captured
-   revision, publish the saved identity, and return any outgoing cookie.
+4. After durable success, if `write.is_destroyed()` is true, delete the written
+   target, call `save.confirm_removed(write)?`, and return a conflict without a
+   cookie. Only confirm removal after its backend operation has succeeded.
+5. Otherwise call `save.complete_with_guard(write)?` to acknowledge the captured
+   revision, publish the saved identity, and return any outgoing cookie. If
+   destruction races with this completion, a creation/rotation remains uncertain
+   and waiting deletion returns an error instead of claiming success.
    Dropping a failed or cancelled token never refunds first-insert authority.
 
 On load, `session.validate_loaded(&cookie)?` checks the ID and expiry and
-establishes loaded persistence state. For deletion, `session.prepare_delete()`
-marks destruction and returns the persisted source ID, including for an
-unsaved rotation or an already marked session. A superseded clone targets its
+establishes loaded persistence state. For deletion, acquire
+`let deletion = session.begin_delete().await?`, delete `deletion.id()` in the
+backend, and retain the guard until the operation completes. It marks
+destruction before waiting for same-lineage writes, and selects the persisted
+source, including an unsaved rotation or an already marked session. An
+unconfirmed creation/rotation may have reached storage; its same-lineage
+deletion fails conservatively and requires a trusted reload or authentication.
+A superseded clone targets its
 old ID rather than another clone's newly persisted identity. Do not call
 crate-private helpers or infer state from an empty application data map.
+
+The legacy synchronous `prepare_delete()` only selects an ID; it does not wait
+for an in-flight write. Likewise, `complete()` assumes equivalent coordination
+provided by the store. Asynchronous stores should use the guarded protocol
+above, not combine the legacy helpers and claim coordinated completion.
 
 ## Cookies and stored data
 
