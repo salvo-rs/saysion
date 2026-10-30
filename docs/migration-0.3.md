@@ -54,13 +54,24 @@ Custom stores must capture the exact snapshot they write and acknowledge only
 that successful revision. Calling `reset_data_changed()` after asynchronous I/O
 can erase newer clone edits.
 
-**Custom-backend protocol support is pending a separate follow-up.** This
-revision does not expose the public snapshot/receipt or trusted-load and
-deletion helpers needed to reproduce the built-in persistence protocol.
-Do not call crate-private persistence methods or assume an existing custom
-SessionStore automatically gains the built-in guarantees. Wait for that
-implementation and its accompanying custom-store guide before adopting its
-protocol. The application and built-in-store guidance above remains applicable.
+Use the [public custom-store protocol](custom-stores.md):
+
+1. Consume the input with `session.prepare_save()?` to obtain a `SessionSave`.
+   Its `session()` is a read-only `SessionSnapshot`; cloning it cannot mutate
+   the pending save. `origin()` identifies a persisted source, if present.
+2. Call `save.validate_current()?` under the backend write lock or before the
+   write, and use atomic backend existence and collision checks as described
+   in the custom-store guide. This validation alone is not a storage lock.
+3. After durable success, call `save.complete()` to acknowledge the captured
+   revision, publish the saved identity, and return any outgoing cookie.
+   Dropping a failed or cancelled token never refunds first-insert authority.
+
+On load, `session.validate_loaded(&cookie)?` checks the ID and expiry and
+establishes loaded persistence state. For deletion, `session.prepare_delete()`
+marks destruction and returns the persisted source ID, including for an
+unsaved rotation or an already marked session. A superseded clone targets its
+old ID rather than another clone's newly persisted identity. Do not call
+crate-private helpers or infer state from an empty application data map.
 
 ## Cookies and stored data
 
@@ -81,8 +92,10 @@ backend credentials, or complete errors that may include them.
 Run SQL `migrate()` to add expiry indexes to existing tables as well as new ones.
 SQL `cleanup()` removes at most 1,000 expired rows per call.
 `cleanup_batch(limit)` accepts 1 through 10,000 and returns the number removed;
-repeat with a deliberate work budget when draining. Do not assume one call
-removes an entire backlog. Consult each backend's cleanup API for its limits.
+repeat with a deliberate work budget when draining. MemoryStore now has the
+same default batch size and limit range, backed by an expiry index rather
+than a scan of all live records. Do not assume one call removes an entire
+backlog; see the [backend guide](en/stores.md) for scheduling examples.
 
 SQL retains the compatible Unix-seconds column and validates the exact expiry
 from serialized data. Redis uses millisecond expiry and literal key prefixes.

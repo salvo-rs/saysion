@@ -15,14 +15,16 @@ the README while evaluating it. Published 0.2.0 does not contain these new APIs.
   the store or authenticate again instead of retrying it as a fresh insertion.
 - Identity, expiry, and outgoing-cookie changes now count as `data_changed()`;
   `needs_persist()` also includes destruction. Review write-suppression policies.
-- SQL `cleanup()` removes one bounded batch. Repeat `cleanup_batch(limit)` with
-  an application work budget when draining a large backlog.
+- SQL and MemoryStore `cleanup()` remove one bounded batch. Repeat
+  `cleanup_batch(limit)` with a work budget when draining a large backlog.
 
 ### Added and corrected
 
 - `SignedCookieStore` authenticates cookies with HMAC-SHA256 and fallback keys;
   it does not encrypt contents or support server-side revocation.
 - `SessionConflict` reports rejected stale or superseded writes.
+- `SessionSave` and read-only `SessionSnapshot` expose the custom-backend
+  prepare/complete protocol, validated loading, and source-aware deletion.
 - Memory loads use independent snapshots; unsaved changes stay request-local.
 - Revision snapshots preserve edits made while asynchronous saves are running.
 - Server-side rotation revokes the original ID; logout rejects late saves.
@@ -31,12 +33,6 @@ the README while evaluating it. Published 0.2.0 does not contain these new APIs.
 - Debug output omits session secrets; SQL deserialization errors propagate.
 - CI runs isolated real-backend contracts, feature combinations, and an external
   consumer. Dependency security floors are part of the published manifest.
-
-### Pending follow-up
-
-- Public custom-backend snapshot, save, validated-load, and deletion protocol
-  helpers are being prepared separately and are not included in this revision.
-  That implementation will provide its own custom-store migration guide.
 
 See the [0.3 migration guide](docs/migration-0.3.md). Publication and release
 tagging remain separate maintainer actions.
