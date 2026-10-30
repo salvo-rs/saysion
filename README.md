@@ -33,6 +33,10 @@ crates.io. It requires **Rust 1.95 or newer**. Published 0.2.0 does not contain
 `SignedCookieStore`, `SessionConflict`, or the new persistence guarantees.
 Use the development source until 0.3.0 is released:
 
+Salvo middleware still depending on saysion 0.2 cannot accept these 0.3 stores.
+Coordinate the middleware dependency's version and source first; see the
+[Salvo compatibility matrix](docs/migration-0.3.md#salvo-middleware-compatibility).
+
 ```toml
 [dependencies]
 saysion = { git = "https://github.com/salvo-rs/saysion", branch = "main" }

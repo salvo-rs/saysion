@@ -124,6 +124,12 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_release_*.py'
       - name: Compile an external consumer of the unreleased API
         run: cargo check --manifest-path tests/fixtures/unreleased-consumer/Cargo.toml
+      - name: Test real Salvo middleware with an aligned development dependency
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: python3 scripts/check_salvo_compat.py
+      - name: Check Salvo integration fixture formatting
+        run: rustfmt --edition 2024 --check tests/fixtures/salvo-compat/compatibility.rs
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
