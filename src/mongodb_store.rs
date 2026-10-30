@@ -103,12 +103,10 @@ impl SessionStore for MongoDbStore {
         let id = Session::id_from_cookie_value(&cookie_value)?;
         tracing::debug!("loading session by id `{}`", id);
         let found = self.coll().find_one(doc! { "_id": &id }).await?;
-        Ok(match found {
-            None => None,
-            Some(d) => serde_json::from_str::<Session>(&d.session)?
-                .validate()
-                .map(Session::mark_loaded),
-        })
+        match found {
+            None => Ok(None),
+            Some(d) => serde_json::from_str::<Session>(&d.session)?.validate_loaded(&cookie_value),
+        }
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
