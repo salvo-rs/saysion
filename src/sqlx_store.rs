@@ -343,6 +343,37 @@ mod sqlite {
             .to_owned()
     }
 
+    fn exact_expiry_predicate(predicate: &str) -> bool {
+        let mut depth = 0_usize;
+        let mut token_depth = None;
+        for character in predicate.chars() {
+            match character {
+                '(' => depth += 1,
+                ')' => {
+                    let Some(parent) = depth.checked_sub(1) else {
+                        return false;
+                    };
+                    depth = parent;
+                }
+                character if character.is_whitespace() => {}
+                _ => {
+                    if *token_depth.get_or_insert(depth) != depth {
+                        // Accept grouping around the complete predicate, but
+                        // not e.g. `expires IS (NOT NULL)`, which means IS NULL.
+                        return false;
+                    }
+                }
+            }
+        }
+        depth == 0
+            && predicate
+                .split(|character: char| {
+                    character.is_whitespace() || matches!(character, '(' | ')')
+                })
+                .filter(|token| !token.is_empty())
+                .eq(["EXPIRES", "IS", "NOT", "NULL"])
+    }
+
     async fn has_expiry_index(
         connection: &mut sqlx::SqliteConnection,
         table: &str,
@@ -416,16 +447,10 @@ mod sqlite {
                 .fetch_one(&mut *connection)
                 .await?;
                 let upper = definition.to_ascii_uppercase();
-                if let Some(position) = upper.rfind("WHERE") {
-                    let predicate: String = upper[position + 5..]
-                        .chars()
-                        .filter(|character| {
-                            !character.is_whitespace() && !matches!(character, '(' | ')')
-                        })
-                        .collect();
-                    if predicate == "EXPIRESISNOTNULL" {
-                        return Ok(true);
-                    }
+                if let Some(position) = upper.rfind("WHERE")
+                    && exact_expiry_predicate(&upper[position + 5..])
+                {
+                    return Ok(true);
                 }
             }
             return Ok(false);

@@ -154,9 +154,15 @@ async fn unrelated_partial_or_prefix_columns_do_not_replace_the_expiry_index() {
         ("wrong_partial", "(expires, id) WHERE expires > 100"),
         ("wrong_order", "(id, expires)"),
         ("wrong_collation", "(expires, id COLLATE NOCASE)"),
+        ("wrong_identifier", "(expires, id) WHERE expiresisnotnull"),
+        (
+            "wrong_null_grouping",
+            "(expires, id) WHERE expires IS (NOT NULL)",
+        ),
     ] {
         sqlx::query(&format!(
-            "CREATE TABLE {table} (id TEXT PRIMARY KEY NOT NULL, expires INTEGER, session TEXT NOT NULL)"
+            "CREATE TABLE {table} (id TEXT PRIMARY KEY NOT NULL, expires INTEGER, \
+             session TEXT NOT NULL, expiresisnotnull INTEGER)"
         ))
         .execute(&pool)
         .await
