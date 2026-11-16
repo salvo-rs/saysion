@@ -196,6 +196,11 @@ let store = saysion::SqlxMySqlStore::from_url("mysql://root:root@127.0.0.1/myapp
 过期时间存为 unix 秒整数,使三种数据库的查询完全一致,也避免了
 为 sqlx 启用额外的时间类型转换 feature。
 
+MySQL 的 `TEXT` 列限制完整序列化会话 JSON 不超过 65,535 字节，
+包括键、转义及元数据。存储会在后端 I/O 前拒绝超限值，即使服务端
+SQL mode 允许截断也不会确认成功。拒绝后数据仍标记为已修改；
+本地大小检查失败不会消耗新会话的首次插入权限。
+
 `migrate()` 还会为已有表添加过期索引，可以重复调用。
 `cleanup()` 每次最多删除 1,000 条记录；`cleanup_batch(limit)` 允许指定
 1 到 10,000 条的上限，并返回删除数量。两者每次只执行一批，不会循环清空
