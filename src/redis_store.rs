@@ -29,7 +29,8 @@ fn ttl_millis(ttl: std::time::Duration) -> Result<u64> {
 /// A session store backed by Redis.
 ///
 /// Internally uses [`redis::aio::ConnectionManager`] which provides
-/// connection pooling/reuse and automatic reconnection.
+/// multiplexed connection reuse and automatic reconnection. Clones share the
+/// same underlying connection; this is not a pool of independent connections.
 #[derive(Clone)]
 pub struct RedisStore {
     conn: ConnectionManager,
