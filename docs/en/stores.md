@@ -108,9 +108,11 @@ async fn main() -> saysion::Result {
 ```
 
 `RedisStore` uses [`redis::aio::ConnectionManager`] internally, which
-provides connection pooling and automatic reconnection. Sessions with
-an expiry are stored using `SET ... EX <ttl>` so Redis evicts them
-automatically.
+provides multiplexed connection reuse and automatic reconnection. Clones share
+one underlying connection rather than a pool of independent connections.
+Sessions with an expiry are stored using `SET ... PX <milliseconds>`, rounding
+positive fractional milliseconds upward. Redis evicts them automatically;
+loading also validates the precise expiry recorded in the session.
 
 The default Redis connection manager has no connection or response timeout.
 Set both explicitly for your request budget, or pass an existing configured
@@ -129,6 +131,21 @@ let store = saysion::RedisStore::new_with_config(
     config,
 ).await?;
 ```
+
+### Namespaced maintenance
+
+`count()` and `clear_store()` use incremental `SCAN` calls. Redis applies the
+literal prefix as a filter; it does not provide a prefix index, so a complete
+iteration still visits the entire database keyspace. A selective prefix in a
+large shared database can therefore require many calls that return no keys.
+The `COUNT` hint controls typical work per call, not total work, memory, or an
+overall deadline. Use a dedicated database or instance when unrelated keys
+dominate, and set an outer deadline appropriate for maintenance operations.
+
+Counting is an estimate during concurrent writes. Clearing is not atomic:
+quiesce writers when a complete clear is required. Only keys matching the
+configured literal prefix are removed; an empty prefix matches the entire
+database. See the [Redis SCAN documentation](https://redis.io/docs/latest/commands/scan/).
 
 ## MongoDB
 
@@ -163,6 +180,11 @@ The official `mongodb` driver maintains a connection pool internally,
 so a single `MongoDbStore` can be cloned and shared. Calling
 `initialize()` creates a TTL index on `expires_at` so MongoDB purges
 expired sessions automatically.
+
+Session lookups always use the primary, overriding a shared client's read
+preference to avoid reloading a revoked session from a lagging secondary. Other
+client options remain in effect; read and write concerns still govern visibility
+and failover durability, so choose them for your logout and failover requirements.
 
 ## SQLx (PostgreSQL / SQLite / MySQL)
 
@@ -232,6 +254,18 @@ MySQL session tables must use InnoDB for transactional rotation. `migrate()`
 explicitly creates new InnoDB tables and rejects existing tables using another
 engine. Run it after upgrading; arrange any required engine conversion explicitly
 before use. The store never converts existing tables or data automatically.
+
+MySQL creates the `session` column with `utf8mb4` explicitly, regardless of the
+database's default charset. Run `migrate()` after upgrading: it rejects existing
+non-`utf8mb4` session columns rather than silently replacing Unicode characters.
+Choose and perform any required schema/data conversion explicitly before use;
+the store never changes existing column encodings automatically.
+
+MySQL's `TEXT` column limits the complete serialized session JSON to 65,535
+bytes, including keys, escaping, and metadata. The store rejects larger values
+before backend I/O, even if the server's SQL mode would permit truncation.
+Rejected values remain dirty; a local size rejection does not consume a fresh
+session's first-insert authority.
 
 `migrate()` also adds an expiry index to existing tables and is safe to repeat.
 `cleanup()` deletes at most 1,000 rows per call. Use `cleanup_batch(limit)` with

@@ -99,7 +99,19 @@ mod pg {
         }
 
         /// Create the sessions table if it does not yet exist.
+        ///
+        /// Concurrent migrations in the same database are serialized through a
+        /// transaction-scoped advisory lock, including table and index creation.
         pub async fn migrate(&self) -> Result {
+            let mut transaction = self.pool.begin().await?;
+            // Use one database-local lock for all saysion DDL. This also covers
+            // differently quoted or schema-qualified names for the same table,
+            // including a relation that does not exist yet. IF NOT EXISTS alone
+            // does not serialize PostgreSQL's system-catalog inserts.
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(0x7361_7973_696f_6e01_i64)
+                .execute(&mut *transaction)
+                .await?;
             let sql = format!(
                 "CREATE TABLE IF NOT EXISTS {table} (\
                     id TEXT PRIMARY KEY NOT NULL, \
@@ -108,13 +120,14 @@ mod pg {
                 )",
                 table = self.table
             );
-            sqlx::query(&sql).execute(&self.pool).await?;
+            sqlx::query(&sql).execute(&mut *transaction).await?;
             let sql = format!(
                 "CREATE INDEX IF NOT EXISTS {} ON {} (expires, id) WHERE expires IS NOT NULL",
                 expiry_index_name(&self.table),
                 self.table
             );
-            sqlx::query(&sql).execute(&self.pool).await?;
+            sqlx::query(&sql).execute(&mut *transaction).await?;
+            transaction.commit().await?;
             Ok(())
         }
 
@@ -502,6 +515,10 @@ mod mysql {
 
     use crate::{Result, Session, SessionStore, async_trait};
 
+    // MySQL TEXT is byte-limited. Reject before dispatch even when the server's
+    // SQL mode would otherwise truncate the value and return only a warning.
+    const MAX_SESSION_JSON_BYTES: usize = 65_535;
+
     fn table_status_target(table: &str) -> (String, String) {
         let mut quoted = None;
         let mut characters = table.char_indices().peekable();
@@ -594,12 +611,14 @@ mod mysql {
         }
 
         pub async fn migrate(&self) -> Result {
+            // Reuse this connection for DDL and metadata so a single-connection
+            // pool never waits for itself while checking engine and charset.
             let mut connection = self.pool.acquire().await?;
             let sql = format!(
                 "CREATE TABLE IF NOT EXISTS {table} (\
                     id VARCHAR(128) PRIMARY KEY NOT NULL, \
                     expires BIGINT NULL, \
-                    session TEXT NOT NULL\
+                    session TEXT CHARACTER SET utf8mb4 NOT NULL\
                 ) ENGINE=InnoDB",
                 table = self.table
             );
@@ -623,6 +642,22 @@ mod mysql {
                     .as_deref()
                     .is_some_and(|name| name.eq_ignore_ascii_case("InnoDB")),
                 "MySQL session table must use InnoDB for atomic rotation; convert the existing table explicitly before using this store"
+            );
+            // Connection encoding does not change the storage charset of an
+            // existing column. Reject incompatible legacy tables instead of
+            // allowing strict-mode failures or non-strict character replacement.
+            let column = sqlx::query(&format!(
+                "SHOW FULL COLUMNS FROM {} LIKE 'session'",
+                self.table
+            ))
+            .fetch_one(&mut *connection)
+            .await?;
+            let collation: Option<String> = column.try_get("Collation")?;
+            anyhow::ensure!(
+                collation
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("utf8mb4_")),
+                "MySQL session column must use utf8mb4; migrate the existing column explicitly before using this store"
             );
             let sql = format!(
                 "CREATE INDEX {} ON {} (expires, id)",
@@ -693,10 +728,16 @@ mod mysql {
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
-            let attempt = session.persistence_attempt()?;
-            let origin = attempt.origin.clone();
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
+            anyhow::ensure!(
+                json.len() <= MAX_SESSION_JSON_BYTES,
+                "serialized MySQL session exceeds the TEXT limit of {MAX_SESSION_JSON_BYTES} bytes"
+            );
+            // An entirely local size rejection has not attempted a backend
+            // write, so it must not consume a fresh session's insert authority.
+            let attempt = session.persistence_attempt()?;
+            let origin = attempt.origin.clone();
             let expires = expiry_unix(&snapshot);
             let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {

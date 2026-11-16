@@ -1,8 +1,9 @@
 name: Session lifecycle
 
 on:
-  pull_request:
-    paths: ['src/**', 'tests/lifecycle_contract.rs', '.github/workflows/lifecycle.yaml', 'Cargo.toml']
+  # CI's backend_contracts job already includes every lifecycle contract on PRs.
+  # Retain a focused, manually dispatched run for backend investigations.
+  workflow_dispatch:
 
 permissions:
   contents: read
