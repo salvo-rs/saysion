@@ -134,6 +134,10 @@ async fn main() -> saysion::Result {
 共享。调用 `initialize()` 会在 `expires_at` 字段上创建 TTL 索引,
 MongoDB 会自动清理过期会话。
 
+会话查找始终读取主节点，覆盖共享 Client 的读偏好，避免从延迟副本重新加载
+已撤销的会话。其他客户端设置继续生效；read concern 和 write concern 仍决定
+可见性和故障切换持久性，应按注销和故障切换要求选择。
+
 ## SQLx (PostgreSQL / SQLite / MySQL)
 
 按需启用对应数据库的 feature(可以同时启用多个):

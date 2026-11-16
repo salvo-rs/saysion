@@ -3,7 +3,7 @@
 //! Enabled by the `mongodb` cargo feature.
 
 use mongodb::bson::{DateTime as BsonDateTime, doc};
-use mongodb::options::IndexOptions;
+use mongodb::options::{IndexOptions, ReadPreference};
 use mongodb::{Client, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,10 @@ fn expiry_datetime(expiry: &time::OffsetDateTime) -> BsonDateTime {
 /// The official `mongodb` driver maintains its own connection pool
 /// internally, so a single [`Client`] (and therefore a single
 /// `MongoDbStore`) can be cloned cheaply and shared between tasks.
+/// Session lookups always read from the primary, even when the client prefers
+/// secondaries, avoiding authentication from a lagging secondary after revocation.
+/// The client's read and write concerns still govern visibility and failover
+/// durability.
 #[derive(Clone)]
 pub struct MongoDbStore {
     client: Client,
@@ -102,7 +106,11 @@ impl SessionStore for MongoDbStore {
     async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
         let id = Session::id_from_cookie_value(&cookie_value)?;
         tracing::debug!("loading session by id `{}`", id);
-        let found = self.coll().find_one(doc! { "_id": &id }).await?;
+        let found = self
+            .coll()
+            .find_one(doc! { "_id": &id })
+            .selection_criteria(ReadPreference::Primary.into())
+            .await?;
         match found {
             None => Ok(None),
             Some(d) => serde_json::from_str::<Session>(&d.session)?.validate_loaded(&cookie_value),
