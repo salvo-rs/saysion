@@ -1,7 +1,7 @@
 # Migrating from 0.2 to 0.4
 
-These notes describe **0.4.0**, which includes the changes developed under the
-unpublished 0.3.0 version. Install with Rust **1.95 or newer**:
+These notes describe the **0.4 series**, including the changes first shipped in
+0.4.0 and the 0.4.1 corrections. Install with Rust **1.95 or newer**:
 
 ```toml
 [dependencies]
@@ -11,6 +11,27 @@ saysion = { version = "0.4" }
 Add the needed backend feature, such as `features = ["redis"]`.
 The crates.io dependency `saysion = "0.2"` does not provide `SignedCookieStore`,
 `SessionConflict`, or these persistence guarantees.
+
+## Updating from 0.4.0 to 0.4.1
+
+MySQL `migrate()` now requires an InnoDB table and a `utf8mb4` session column.
+It creates compatible new tables but rejects incompatible existing tables;
+operators must explicitly convert legacy engines or character sets before
+startup. No existing data is converted automatically. Serialized session JSON
+must fit the existing `TEXT` column's 65,535-byte limit, even in non-strict SQL
+mode; oversized values return an error without acknowledging the save.
+
+Cookie stores reject saves of locally destroyed sessions. Previously issued
+client-side cookies remain replayable according to their authenticated expiry.
+Use `Session::try_expire_in` for fallible validation of configured or external
+TTLs; `expire_in` retains its existing panicking behavior for unrepresentable
+deadlines. The wire formats and Rust 1.95 requirement are unchanged.
+
+The bundled SQLite dependency still has an open
+[security advisory](https://rustsec.org/advisories/RUSTSEC-2026-0459.html)
+involving untrusted database/WAL files. This release does not resolve that
+dependency issue; protect those files from less trusted writers and assess the
+actual SQLite library used by the deployment.
 
 ## Salvo middleware compatibility
 

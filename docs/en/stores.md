@@ -1,6 +1,6 @@
 # Saysion Session Stores
 
-> This guide describes **saysion 0.4.0**, requiring **Rust 1.95 or newer**.
+> This guide describes **saysion 0.4.1**, requiring **Rust 1.95 or newer**.
 > Use the crates.io dependency below. See the [migration guide](../migration-0.4.md).
 
 Saysion ships with several pluggable session stores. Most are gated

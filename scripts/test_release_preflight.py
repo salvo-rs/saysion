@@ -43,7 +43,7 @@ class RegistryPreflightTests(unittest.TestCase):
 class InstallationGuideTests(unittest.TestCase):
     def test_release_guides_use_the_registry_version(self):
         package = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]
-        self.assertEqual(package["version"], "0.4.0")
+        self.assertEqual(package["version"], "0.4.1")
         self.assertEqual(package["rust-version"], "1.95")
         for guide in ("README.md", "docs/en/stores.md", "docs/zh/stores.md", "docs/migration-0.4.md"):
             with self.subTest(guide=guide):

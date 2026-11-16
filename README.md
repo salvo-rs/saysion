@@ -28,7 +28,7 @@
 
 ## Installation
 
-Saysion **0.4.0** requires **Rust 1.95 or newer**. Version 0.2.0 does not contain
+Saysion **0.4.1** requires **Rust 1.95 or newer**. Version 0.2.0 does not contain
 `SignedCookieStore`, `SessionConflict`, or the new persistence guarantees.
 
 Salvo middleware still depending on saysion 0.2 cannot accept these 0.4 stores.
