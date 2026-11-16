@@ -108,9 +108,11 @@ async fn main() -> saysion::Result {
 ```
 
 `RedisStore` uses [`redis::aio::ConnectionManager`] internally, which
-provides connection pooling and automatic reconnection. Sessions with
-an expiry are stored using `SET ... EX <ttl>` so Redis evicts them
-automatically.
+provides multiplexed connection reuse and automatic reconnection. Clones share
+one underlying connection rather than a pool of independent connections.
+Sessions with an expiry are stored using `SET ... PX <milliseconds>`, rounding
+positive fractional milliseconds upward. Redis evicts them automatically;
+loading also validates the precise expiry recorded in the session.
 
 The default Redis connection manager has no connection or response timeout.
 Set both explicitly for your request budget, or pass an existing configured

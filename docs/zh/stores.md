@@ -98,8 +98,9 @@ async fn main() -> saysion::Result {
 ```
 
 `RedisStore` 内部使用 [`redis::aio::ConnectionManager`],自带连接复用
-与自动重连。带有过期时间的会话通过 `SET ... EX <ttl>` 写入,Redis 会
-自动清理过期键。
+与自动重连。克隆共享同一底层连接，而非多条独立连接组成的连接池。
+带有过期时间的会话通过 `SET ... PX <毫秒数>` 写入，不足一毫秒的正数
+部分向上取整。Redis 会自动清理过期键；加载时也会校验会话内的精确过期时间。
 
 ## MongoDB
 
