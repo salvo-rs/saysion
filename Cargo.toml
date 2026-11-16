@@ -44,16 +44,16 @@ tokio = { version = "1.53.3", default-features = false, optional = true }
 # Optional backends
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"], optional = true }
 mongodb = { version = "3", optional = true }
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls"], optional = true }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio"], optional = true }
 
 [features]
 default = []
 redis = ["dep:redis", "dep:tokio"]
 mongodb = ["dep:mongodb", "dep:tokio", "dep:ctutils", "dep:rustls", "dep:rustls-webpki", "dep:webpki-roots"]
-sqlx = ["dep:sqlx", "dep:tokio", "dep:rustls", "dep:rustls-webpki", "dep:webpki-roots"]
-sqlx-postgres = ["sqlx", "sqlx/postgres"]
+sqlx = ["dep:sqlx", "dep:tokio"]
+sqlx-postgres = ["sqlx", "sqlx/postgres", "sqlx/runtime-tokio-rustls", "dep:rustls", "dep:rustls-webpki", "dep:webpki-roots"]
 sqlx-sqlite = ["sqlx", "sqlx/sqlite"]
-sqlx-mysql = ["sqlx", "sqlx/mysql"]
+sqlx-mysql = ["sqlx", "sqlx/mysql", "sqlx/runtime-tokio-rustls", "dep:rustls", "dep:rustls-webpki", "dep:webpki-roots"]
 
 [package.metadata.docs.rs]
 all-features = true
