@@ -109,6 +109,23 @@ mod pg {
                 table = self.table
             );
             sqlx::query(&sql).execute(&self.pool).await?;
+            let (indexed,): (bool,) = sqlx::query_as(
+                "SELECT EXISTS (SELECT 1 FROM pg_index AS i \
+                 JOIN pg_class AS c ON c.oid = i.indexrelid \
+                 JOIN pg_am AS a ON a.oid = c.relam \
+                 WHERE i.indrelid = to_regclass($1) AND i.indisvalid AND i.indisready \
+                 AND a.amname = 'btree' AND i.indnatts = 2 \
+                 AND pg_get_indexdef(i.indexrelid, 1, true) = 'expires' \
+                 AND pg_get_indexdef(i.indexrelid, 2, true) = 'id' \
+                 AND (i.indpred IS NULL OR \
+                      pg_get_expr(i.indpred, i.indrelid) = '(expires IS NOT NULL)'))",
+            )
+            .bind(&self.table)
+            .fetch_one(&self.pool)
+            .await?;
+            if indexed {
+                return Ok(());
+            }
             let sql = format!(
                 "CREATE INDEX IF NOT EXISTS {} ON {} (expires, id) WHERE expires IS NOT NULL",
                 expiry_index_name(&self.table),
@@ -310,6 +327,137 @@ mod sqlite {
         (index, table)
     }
 
+    fn unquote_identifier(identifier: &str) -> String {
+        for quote in ['"', '\'', '`'] {
+            if let Some(inner) = identifier
+                .strip_prefix(quote)
+                .and_then(|value| value.strip_suffix(quote))
+            {
+                return inner.replace(&format!("{quote}{quote}"), &quote.to_string());
+            }
+        }
+        identifier
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .unwrap_or(identifier)
+            .to_owned()
+    }
+
+    fn exact_expiry_predicate(predicate: &str) -> bool {
+        let mut depth = 0_usize;
+        let mut token_depth = None;
+        for character in predicate.chars() {
+            match character {
+                '(' => depth += 1,
+                ')' => {
+                    let Some(parent) = depth.checked_sub(1) else {
+                        return false;
+                    };
+                    depth = parent;
+                }
+                character if character.is_whitespace() => {}
+                _ => {
+                    if *token_depth.get_or_insert(depth) != depth {
+                        // Accept grouping around the complete predicate, but
+                        // not e.g. `expires IS (NOT NULL)`, which means IS NULL.
+                        return false;
+                    }
+                }
+            }
+        }
+        depth == 0
+            && predicate
+                .split(|character: char| {
+                    character.is_whitespace() || matches!(character, '(' | ')')
+                })
+                .filter(|token| !token.is_empty())
+                .eq(["EXPIRES", "IS", "NOT", "NULL"])
+    }
+
+    async fn has_expiry_index(
+        connection: &mut sqlx::SqliteConnection,
+        table: &str,
+    ) -> Result<bool> {
+        let (index, table) = index_target(table);
+        let requested_schema = index
+            .rsplit_once('.')
+            .map(|(schema, _)| unquote_identifier(schema));
+        let requested_table = unquote_identifier(table.trim());
+        let mut databases: Vec<(i64, String, String)> = sqlx::query_as("PRAGMA database_list")
+            .fetch_all(&mut *connection)
+            .await?;
+        // SQLite resolves an unqualified name in temp, main, then attachment
+        // order. Read metadata from that actual schema, not a raw SQL spelling.
+        databases.sort_by_key(
+            |(sequence, name, _)| {
+                if name == "temp" { -1 } else { *sequence }
+            },
+        );
+        for (_, schema, _) in databases {
+            if requested_schema
+                .as_deref()
+                .is_some_and(|requested| !schema.eq_ignore_ascii_case(requested))
+            {
+                continue;
+            }
+            let schema_sql = format!("\"{}\"", schema.replace('"', "\"\""));
+            let relation: Option<(String,)> = sqlx::query_as(&format!(
+                "SELECT name FROM {schema_sql}.sqlite_master \
+                 WHERE type = 'table' AND name = ? COLLATE NOCASE"
+            ))
+            .bind(&requested_table)
+            .fetch_optional(&mut *connection)
+            .await?;
+            let Some((name,)) = relation else { continue };
+            let indexes: Vec<(String, i64)> =
+                sqlx::query_as("SELECT name, partial FROM pragma_index_list(?, ?)")
+                    .bind(&name)
+                    .bind(&schema)
+                    .fetch_all(&mut *connection)
+                    .await?;
+            for (name, partial) in indexes {
+                let columns: Vec<(Option<String>, i64, String)> = sqlx::query_as(
+                    "SELECT name, \"desc\", coll FROM pragma_index_xinfo(?, ?) \
+                     WHERE key = 1 ORDER BY seqno",
+                )
+                .bind(&name)
+                .bind(&schema)
+                .fetch_all(&mut *connection)
+                .await?;
+                if columns.len() != 2
+                    || columns.iter().zip(["expires", "id"]).any(
+                        |((name, descending, collation), expected)| {
+                            !name
+                                .as_deref()
+                                .is_some_and(|name| name.eq_ignore_ascii_case(expected))
+                                || *descending != 0
+                                || !collation.eq_ignore_ascii_case("BINARY")
+                        },
+                    )
+                {
+                    continue;
+                }
+                if partial == 0 {
+                    return Ok(true);
+                }
+                let (definition,): (String,) = sqlx::query_as(&format!(
+                    "SELECT sql FROM {schema_sql}.sqlite_master WHERE name = ? AND type = 'index'"
+                ))
+                .bind(&name)
+                .fetch_one(&mut *connection)
+                .await?;
+                let upper = definition.to_ascii_uppercase();
+                if let Some(position) = upper.rfind("WHERE")
+                    && exact_expiry_predicate(&upper[position + 5..])
+                {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
+        Ok(false)
+    }
+
     /// SQLite-backed session store.
     #[derive(Clone, Debug)]
     pub struct SqlxSqliteStore {
@@ -335,6 +483,7 @@ mod sqlite {
         }
 
         pub async fn migrate(&self) -> Result {
+            let mut connection = self.pool.acquire().await?;
             let sql = format!(
                 "CREATE TABLE IF NOT EXISTS {table} (\
                     id TEXT PRIMARY KEY NOT NULL, \
@@ -343,12 +492,15 @@ mod sqlite {
                 )",
                 table = self.table
             );
-            sqlx::query(&sql).execute(&self.pool).await?;
+            sqlx::query(&sql).execute(&mut *connection).await?;
+            if has_expiry_index(&mut connection, &self.table).await? {
+                return Ok(());
+            }
             let (index, table) = index_target(&self.table);
             let sql = format!(
                 "CREATE INDEX IF NOT EXISTS {index} ON {table} (expires, id) WHERE expires IS NOT NULL"
             );
-            sqlx::query(&sql).execute(&self.pool).await?;
+            sqlx::query(&sql).execute(&mut *connection).await?;
             Ok(())
         }
 
@@ -498,9 +650,59 @@ pub use sqlite::SqlxSqliteStore;
 #[allow(missing_docs)]
 mod mysql {
     use super::*;
-    use sqlx::MySqlPool;
+    use sqlx::{MySqlPool, Row};
 
     use crate::{Result, Session, SessionStore, async_trait};
+
+    fn metadata_flag(row: &sqlx::mysql::MySqlRow, name: &str, enabled: &str) -> Result<bool> {
+        match row.try_get::<String, _>(name) {
+            Ok(value) => Ok(value == enabled),
+            Err(sqlx::Error::ColumnNotFound(_)) => Ok(true),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    async fn has_expiry_index(pool: &MySqlPool, table: &str) -> Result<bool> {
+        let rows = sqlx::query(&format!("SHOW INDEX FROM {table}"))
+            .fetch_all(pool)
+            .await?;
+        let mut indexes =
+            std::collections::HashMap::<String, Vec<(u64, Option<String>, bool)>>::new();
+        for row in rows {
+            let name: String = row.try_get("Key_name")?;
+            let sequence: u64 = row.try_get("Seq_in_index")?;
+            let column: Option<String> = row.try_get("Column_name")?;
+            let prefix: Option<u64> = row.try_get("Sub_part")?;
+            let order: Option<String> = row.try_get("Collation")?;
+            let kind: String = row.try_get("Index_type")?;
+            // MySQL calls this Visible; MariaDB calls its inverse Ignored.
+            let visible =
+                metadata_flag(&row, "Visible", "YES")? && metadata_flag(&row, "Ignored", "NO")?;
+            let usable =
+                visible && kind == "BTREE" && prefix.is_none() && order.as_deref() == Some("A");
+            indexes
+                .entry(name)
+                .or_default()
+                .push((sequence, column, usable));
+        }
+        for columns in indexes.values_mut() {
+            columns.sort_by_key(|(sequence, _, _)| *sequence);
+            if columns.len() == 2
+                && columns.iter().zip(["expires", "id"]).enumerate().all(
+                    |(position, ((sequence, name, usable), expected))| {
+                        *sequence == position as u64 + 1
+                            && *usable
+                            && name
+                                .as_deref()
+                                .is_some_and(|name| name.eq_ignore_ascii_case(expected))
+                    },
+                )
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 
     /// MySQL/MariaDB-backed session store.
     #[derive(Clone, Debug)]
@@ -536,6 +738,9 @@ mod mysql {
                 table = self.table
             );
             sqlx::query(&sql).execute(&self.pool).await?;
+            if has_expiry_index(&self.pool, &self.table).await? {
+                return Ok(());
+            }
             let sql = format!(
                 "CREATE INDEX {} ON {} (expires, id)",
                 expiry_index_name(&self.table),

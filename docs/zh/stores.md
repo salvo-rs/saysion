@@ -197,6 +197,9 @@ let store = saysion::SqlxMySqlStore::from_url("mysql://root:root@127.0.0.1/myapp
 为 sqlx 启用额外的时间类型转换 feature。
 
 `migrate()` 还会为已有表添加过期索引，可以重复调用。
+它会复用实际会话表上兼容的索引，避免配置改用 schema 限定名或其他
+引号写法后再添加相同索引；不会删除或重命名既有索引。这不提供与
+任意外部并发 schema 修改的协调，迁移仍应遵循部署的 schema 变更策略。
 `cleanup()` 每次最多删除 1,000 条记录；`cleanup_batch(limit)` 允许指定
 1 到 10,000 条的上限，并返回删除数量。两者每次只执行一批，不会循环清空
 整张表，调用方应按需安排后续清理。秒级字段继续兼容旧数据；加载时会校验

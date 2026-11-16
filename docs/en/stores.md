@@ -229,6 +229,11 @@ across all three databases without pulling in extra type-conversion
 features.
 
 `migrate()` also adds an expiry index to existing tables and is safe to repeat.
+It reuses a compatible index on the actual table, including when a later
+configuration spells that table with a schema qualifier or different quoting.
+Existing indexes are never removed or renamed. This does not add coordination
+with arbitrary concurrent schema changes; run migrations under your deployment's
+schema-change policy.
 `cleanup()` deletes at most 1,000 rows per call. Use `cleanup_batch(limit)` with
 a limit from 1 to 10,000 to control each delete statement and obtain its deleted
 row count. Schedule further calls as needed; neither method loops until the

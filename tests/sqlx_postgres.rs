@@ -121,3 +121,63 @@ async fn pg_destroy_and_clear() {
     assert_eq!(store.count().await.unwrap(), 0);
     store.finish().await;
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; exercised by the backend CI job"]
+async fn pg_equivalent_table_names_reuse_the_expiry_index() {
+    let store = fresh_store().await;
+    let (schema,): (String,) = sqlx::query_as("SELECT current_schema()")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let qualified = format!("\"{}\".\"{}\"", schema.replace('"', "\"\""), store.table);
+    SqlxPostgresStore::new(store.pool.clone())
+        .with_table(qualified)
+        .migrate()
+        .await
+        .unwrap();
+    let (indexes,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM pg_index AS i JOIN pg_class AS c ON c.oid = i.indexrelid \
+         WHERE i.indrelid = to_regclass($1) AND c.relname LIKE 'saysion_expiry_%'",
+    )
+    .bind(&store.table)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(indexes, 1);
+    store.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; exercised by the backend CI job"]
+async fn pg_unrelated_partial_index_is_preserved_without_replacing_cleanup_index() {
+    let pool = sqlx::PgPool::connect(&url()).await.unwrap();
+    let table = format!("saysion_partial_{:016x}", rand::random::<u64>());
+    sqlx::query(&format!(
+        "CREATE TABLE {table} (id TEXT PRIMARY KEY NOT NULL, expires BIGINT, session TEXT NOT NULL)"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(&format!(
+        "CREATE INDEX user_{table} ON {table} (expires,id) WHERE expires > 100"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let store = SqlxPostgresStore::new(pool.clone()).with_table(&table);
+    store.migrate().await.unwrap();
+    let (indexes,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM pg_index WHERE indrelid=to_regclass($1) AND NOT indisprimary",
+    )
+    .bind(&table)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(&format!("DROP TABLE {table}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    assert_eq!(indexes, 2);
+}
