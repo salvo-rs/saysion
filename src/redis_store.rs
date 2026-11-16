@@ -29,7 +29,8 @@ fn ttl_millis(ttl: std::time::Duration) -> Result<u64> {
 /// A session store backed by Redis.
 ///
 /// Internally uses [`redis::aio::ConnectionManager`] which provides
-/// connection pooling/reuse and automatic reconnection.
+/// multiplexed connection reuse and automatic reconnection. Clones share the
+/// same underlying connection; this is not a pool of independent connections.
 #[derive(Clone)]
 pub struct RedisStore {
     conn: ConnectionManager,
@@ -90,13 +91,15 @@ impl RedisStore {
     /// The prefix is matched literally, including Redis glob characters.
     /// The count is an estimate while keys are concurrently modified, since
     /// `SCAN` can return duplicates or omit keys added during iteration.
+    /// A complete iteration visits the database keyspace even for a selective
+    /// prefix; the scan batch hint does not bound total work or elapsed time.
     pub async fn count(&self) -> Result<usize> {
         let mut conn = self.conn.clone();
         let pattern = prefix_pattern(&self.prefix);
         let mut cursor = 0;
         let mut total = 0;
         loop {
-            let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+            let (next, keys): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("MATCH")
                 .arg(&pattern)
@@ -106,7 +109,7 @@ impl RedisStore {
                 .await?;
             total += keys
                 .iter()
-                .filter(|key| key.starts_with(&self.prefix))
+                .filter(|key| key.starts_with(self.prefix.as_bytes()))
                 .count();
             cursor = next;
             if cursor == 0 {
@@ -231,13 +234,15 @@ impl SessionStore for RedisStore {
     /// Requires Redis 4 or later. This operation is not atomic: writes made
     /// during the scan may survive or be removed. Quiesce writers if a complete
     /// clear is required. An empty prefix intentionally matches the whole DB.
+    /// Scanning visits the database keyspace even with a nonempty prefix.
+    /// Consider a dedicated database or instance when unrelated keys dominate.
     async fn clear_store(&self) -> Result {
         tracing::debug!("clearing redis store with prefix `{}`", self.prefix);
         let mut conn = self.conn.clone();
         let pattern = prefix_pattern(&self.prefix);
         let mut cursor = 0;
         loop {
-            let (next, mut keys): (u64, Vec<String>) = redis::cmd("SCAN")
+            let (next, mut keys): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("MATCH")
                 .arg(&pattern)
@@ -245,7 +250,7 @@ impl SessionStore for RedisStore {
                 .arg(SCAN_BATCH_SIZE)
                 .query_async(&mut conn)
                 .await?;
-            keys.retain(|key| key.starts_with(&self.prefix));
+            keys.retain(|key| key.starts_with(self.prefix.as_bytes()));
             // COUNT is a scan hint, not a strict response-size guarantee.
             for batch in keys.chunks(SCAN_BATCH_SIZE) {
                 let _: usize = redis::cmd("UNLINK")

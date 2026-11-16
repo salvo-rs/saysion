@@ -30,6 +30,8 @@ const MAX_BINARY_LEN: usize = (MAX_VALUE_LEN - PREFIX.len()) / 4 * 3;
 /// by clients. Use a server-side store for confidential data or immediate
 /// revocation: `destroy_session` and `clear_store` are no-ops, and removing a
 /// browser cookie does not revoke copies. Set a finite expiry for sessions.
+/// Saving a locally destroyed session returns [`crate::SessionConflict`]
+/// instead of signing another value; this does not revoke older values.
 ///
 /// This format is distinct from [`crate::CookieStore`]. Unsigned legacy values
 /// are never accepted, including during key rotation. Invalid, forged, or
@@ -127,6 +129,9 @@ impl SessionStore for SignedCookieStore {
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
+        if session.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
         // A bounded buffer rejects oversized sessions without allocating an
         // arbitrarily large serialized payload first.
         let mut buffer = vec![0; MAX_BINARY_LEN - TAG_LEN];
@@ -138,6 +143,9 @@ impl SessionStore for SignedCookieStore {
         bytes.extend_from_slice(&tag);
         bytes.extend_from_slice(payload);
         let cookie = format!("{PREFIX}{}", BASE64_STANDARD.encode(bytes));
+        if session.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
         session.acknowledge_revision(revision);
         Ok(Some(cookie))
     }

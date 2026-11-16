@@ -54,3 +54,34 @@ provide. Reload confirmed backend state to resolve it. The public protocol uses
 `SessionSave::begin_write` / `complete_with_guard` and `Session::begin_delete`;
 synchronous ID selection alone does not provide this coordination. No
 synchronous lock is held across backend awaits.
+
+## Concurrent data updates
+
+Identity conflict checks do not provide optimistic concurrency for the contents
+of a live session. Independent requests load independent maps and save complete
+snapshots. If two requests both load an empty map, one adds `first` and the other
+adds `second`, saving both can leave only `second`: the last backend write wins,
+with no field merge or data-version comparison.
+
+Request-local clones share data and save acknowledgment bookkeeping. Capturing
+and acknowledging a revision ensures that later edits remain dirty; it does not
+compare the record written by a different request or process. `SessionConflict`
+therefore does not mean that all concurrent application changes are detected.
+Use database atomic operations, an application version/CAS check, or account
+generations for counters, one-time tokens, and other state that needs stronger
+concurrency rules.
+
+## Expiry and renewal by running requests
+
+Loading validates the precise session expiry. This does not establish an
+absolute deadline after which an already-running request can never renew it.
+Such a request can extend its copied expiry and save if the physical backend
+record still exists. Memory cleanup, SQL cleanup, and MongoDB's TTL monitor may
+not have removed that record yet. Redis may already have expired its key, in
+which case the conditional save returns `SessionConflict` instead.
+
+Backend substitution can therefore change long-request renewal behavior. For a
+fixed maximum login lifetime, retain a separate original authentication time or
+maximum deadline and enforce it when authorizing and renewing, rather than
+deriving it only from the sliding session expiry. A destroyed or removed
+identity still cannot be recreated by an ordinary stale server-side save.
