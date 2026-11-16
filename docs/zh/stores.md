@@ -213,6 +213,11 @@ let store = saysion::SqlxMySqlStore::from_url("mysql://root:root@127.0.0.1/myapp
 过期时间存为 unix 秒整数,使三种数据库的查询完全一致,也避免了
 为 sqlx 启用额外的时间类型转换 feature。
 
+MySQL 会话表必须使用 InnoDB，才能保证轮换操作的事务回滚。
+`migrate()` 显式创建 InnoDB 新表，并拒绝其他引擎的已有表。
+升级后应重新运行检查，在使用前明确安排所需的引擎转换；
+存储不会自动转换已有表或数据。
+
 MySQL 会显式使用 `utf8mb4` 创建 `session` 列，不继承数据库默认字符集。
 升级后应重新运行 `migrate()`：已有列若不是 `utf8mb4`，会返回错误，
 而不会允许 Unicode 被静默替换。应在使用前明确安排所需的 schema 与

@@ -250,6 +250,11 @@ Storing the expiry as a unix-second integer keeps queries portable
 across all three databases without pulling in extra type-conversion
 features.
 
+MySQL session tables must use InnoDB for transactional rotation. `migrate()`
+explicitly creates new InnoDB tables and rejects existing tables using another
+engine. Run it after upgrading; arrange any required engine conversion explicitly
+before use. The store never converts existing tables or data automatically.
+
 MySQL creates the `session` column with `utf8mb4` explicitly, regardless of the
 database's default charset. Run `migrate()` after upgrading: it rejects existing
 non-`utf8mb4` session columns rather than silently replacing Unicode characters.
