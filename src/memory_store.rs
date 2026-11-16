@@ -37,11 +37,6 @@ impl MemoryState {
         Some(previous)
     }
 
-    fn clear(&mut self) {
-        self.records.clear();
-        self.expiries.clear();
-    }
-
     fn expired_candidates(&self, now: time::OffsetDateTime, limit: usize) -> Vec<String> {
         // Start at the oldest expiry. Permanent records are never indexed, and
         // the first live entry terminates the scan regardless of store size.
@@ -105,16 +100,19 @@ impl SessionStore for MemoryStore {
     async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
         let id = Session::id_from_cookie_value(&cookie_value)?;
         tracing::debug!("loading session by id `{}`", id);
-        let session = self
-            .inner
-            .read()
-            .await
-            .records
-            .get(&id)
-            .filter(|session| !session.is_expired())
-            .map(Session::snapshot);
-        match session {
-            Some(session) => session.validate_loaded(&cookie_value),
+        let record = {
+            let state = self.inner.read().await;
+            state
+                .records
+                .get(&id)
+                .filter(|session| !session.is_expired())
+                .cloned()
+        };
+        // Persisted records are immutable: replacement swaps the whole entry.
+        // Retain ownership cheaply under the global lock, then make the
+        // request's independent data snapshot after releasing that lock.
+        match record {
+            Some(record) => record.snapshot().validate_loaded(&cookie_value),
             None => Ok(None),
         }
     }
@@ -141,17 +139,21 @@ impl SessionStore for MemoryStore {
         if origin.as_deref() != Some(session.id()) && state.records.contains_key(session.id()) {
             return Err(crate::SessionConflict.into());
         }
-        if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != session.id())
-            && state.remove(old_id).is_none()
-        {
-            return Err(crate::SessionConflict.into());
-        }
-        state.insert(session.id().to_string(), snapshot.mark_loaded());
+        let removed_origin =
+            if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != session.id()) {
+                Some(state.remove(old_id).ok_or(crate::SessionConflict)?)
+            } else {
+                None
+            };
+        let previous = state.insert(session.id().to_string(), snapshot.mark_loaded());
         if let Err(error) = write.finish() {
-            state.remove(session.id());
+            let removed_target = state.remove(session.id());
+            drop(state);
+            drop((removed_origin, previous, removed_target));
             return Err(error);
         }
         drop(state);
+        drop((removed_origin, previous));
 
         session.mark_persisted();
         session.acknowledge_revision(revision);
@@ -161,13 +163,22 @@ impl SessionStore for MemoryStore {
     async fn destroy_session(&self, mut session: Session) -> Result {
         tracing::debug!("destroying session by id `{}`", session.id());
         let deletion = session.begin_delete().await?;
-        self.inner.write().await.remove(deletion.id());
+        let removed = self.inner.write().await.remove(deletion.id());
+        drop(removed);
         Ok(())
     }
 
     async fn clear_store(&self) -> Result {
         tracing::debug!("clearing memory store");
-        self.inner.write().await.clear();
+        let removed = {
+            let mut state = self.inner.write().await;
+            // Preserve atomic visibility of the records and their expiry index.
+            (
+                std::mem::take(&mut state.records),
+                std::mem::take(&mut state.expiries),
+            )
+        };
+        drop(removed);
         Ok(())
     }
 }
