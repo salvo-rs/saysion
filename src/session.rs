@@ -38,6 +38,15 @@ struct SessionData {
     uncertain_save: bool,
 }
 
+// Borrow exactly the persisted fields while their data revision is locked.
+// The representation matches Session for both JSON and postcard.
+#[derive(Serialize)]
+struct WireSession<'a> {
+    id: &'a str,
+    expiry: Option<DateTime>,
+    data: &'a HashMap<String, String>,
+}
+
 /// One captured save's acknowledgement and cancellation bookkeeping.
 ///
 /// Data and this state share a lock. Once saves overlap, callback order cannot
@@ -250,6 +259,37 @@ impl Session {
         (snapshot, revision)
     }
 
+    fn serialize_with<T, E>(
+        &self,
+        encode: impl FnOnce(&WireSession<'_>) -> Result<T, E>,
+    ) -> Result<(T, SaveRevision), E> {
+        let mut data = self.data.write().unwrap();
+        let wire = WireSession {
+            id: &self.id,
+            expiry: self.expiry,
+            data: &data.values,
+        };
+        let payload = encode(&wire)?;
+        let revision = SaveRevision::capture(&self.data, &mut data);
+        Ok((payload, revision))
+    }
+
+    #[cfg(any(
+        test,
+        feature = "redis",
+        feature = "mongodb",
+        feature = "sqlx-postgres",
+        feature = "sqlx-sqlite",
+        feature = "sqlx-mysql"
+    ))]
+    pub(crate) fn serialize_json(&self) -> Result<(String, SaveRevision), serde_json::Error> {
+        self.serialize_with(|wire| serde_json::to_string(wire))
+    }
+
+    pub(crate) fn serialize_postcard(&self) -> Result<(Vec<u8>, SaveRevision), postcard::Error> {
+        self.serialize_with(|wire| postcard::to_stdvec(wire))
+    }
+
     /// Encode one bounded data snapshot together with its revision. Borrowing
     /// the values under their lock avoids cloning an oversized map before the
     /// serializer can reject it. The wire fields match Session's representation.
@@ -257,22 +297,7 @@ impl Session {
         &self,
         buffer: &'buffer mut [u8],
     ) -> Result<(&'buffer mut [u8], SaveRevision), postcard::Error> {
-        #[derive(Serialize)]
-        struct WireSession<'a> {
-            id: &'a str,
-            expiry: Option<DateTime>,
-            data: &'a HashMap<String, String>,
-        }
-
-        let mut data = self.data.write().unwrap();
-        let wire = WireSession {
-            id: &self.id,
-            expiry: self.expiry,
-            data: &data.values,
-        };
-        let payload = postcard::to_slice(&wire, buffer)?;
-        let revision = SaveRevision::capture(&self.data, &mut data);
-        Ok((payload, revision))
+        self.serialize_with(|wire| postcard::to_slice(wire, buffer))
     }
 
     /// Acknowledge only the data represented by a successfully saved snapshot.
@@ -1105,6 +1130,36 @@ mod read_tests {
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+
+    #[test]
+    fn owned_encodings_preserve_wire_format_and_later_clone_edits() -> crate::Result {
+        let mut session = Session::new();
+        session.expire_in(std::time::Duration::from_secs(60));
+        session.insert("value", 1_u64)?;
+        let expected_json = serde_json::to_string(&session)?;
+        let (json, revision) = session.serialize_json()?;
+        assert_eq!(json, expected_json);
+        session.insert("value", 2_u64)?;
+        session.acknowledge_revision(revision);
+        assert!(session.data_changed());
+        let saved: Session = serde_json::from_str(&json)?;
+        assert_eq!(saved.id(), session.id());
+        assert_eq!(saved.expiry(), session.expiry());
+        assert_eq!(saved.get::<u64>("value"), Some(1));
+
+        let expected_postcard = postcard::to_stdvec(&session)?;
+        let (bytes, revision) = session.serialize_postcard()?;
+        assert_eq!(bytes, expected_postcard);
+        let mut editor = session.clone();
+        editor.insert("value", 3_u64)?;
+        session.acknowledge_revision(revision);
+        assert!(editor.data_changed());
+        let saved: Session = postcard::from_bytes(&bytes)?;
+        assert_eq!(saved.id(), session.id());
+        assert_eq!(saved.expiry(), session.expiry());
+        assert_eq!(saved.get::<u64>("value"), Some(2));
+        Ok(())
+    }
 
     #[test]
     fn native_and_bounded_capture_paths_share_overlap_tracking() {

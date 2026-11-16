@@ -179,9 +179,8 @@ mod pg {
             let id = session.id().to_string();
             let attempt = session.persistence_attempt()?;
             let origin = attempt.origin.clone();
-            let (snapshot, revision) = session.persistence_snapshot();
-            let json = serde_json::to_string(&snapshot)?;
-            let expires = expiry_unix(&snapshot);
+            let (json, revision) = session.serialize_json()?;
+            let expires = expiry_unix(&session);
             let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {
                 let mut tx = self.pool.begin().await?;
@@ -407,9 +406,8 @@ mod sqlite {
             let id = session.id().to_string();
             let attempt = session.persistence_attempt()?;
             let origin = attempt.origin.clone();
-            let (snapshot, revision) = session.persistence_snapshot();
-            let json = serde_json::to_string(&snapshot)?;
-            let expires = expiry_unix(&snapshot);
+            let (json, revision) = session.serialize_json()?;
+            let expires = expiry_unix(&session);
             let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {
                 let mut tx = self.pool.begin().await?;
@@ -607,9 +605,8 @@ mod mysql {
             let id = session.id().to_string();
             let attempt = session.persistence_attempt()?;
             let origin = attempt.origin.clone();
-            let (snapshot, revision) = session.persistence_snapshot();
-            let json = serde_json::to_string(&snapshot)?;
-            let expires = expiry_unix(&snapshot);
+            let (json, revision) = session.serialize_json()?;
+            let expires = expiry_unix(&session);
             let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {
                 let mut tx = self.pool.begin().await?;

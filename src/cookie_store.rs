@@ -39,8 +39,7 @@ impl SessionStore for CookieStore {
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
-        let (snapshot, revision) = session.persistence_snapshot();
-        let serialized = postcard::to_stdvec(&snapshot)?;
+        let (serialized, revision) = session.serialize_postcard()?;
         let cookie = BASE64_STANDARD.encode(serialized);
         session.acknowledge_revision(revision);
         Ok(Some(cookie))

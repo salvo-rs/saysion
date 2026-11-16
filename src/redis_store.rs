@@ -137,14 +137,13 @@ impl SessionStore for RedisStore {
         if session.is_destroyed() {
             return Err(crate::SessionConflict.into());
         }
-        let (snapshot, revision) = session.persistence_snapshot();
-        let json = serde_json::to_string(&snapshot)?;
+        let (json, revision) = session.serialize_json()?;
         let mut write = session.begin_backend_write(&origin, true).await?;
         let mut conn = self.conn.clone();
         if let Some(old_id) = origin.as_deref().filter(|old_id| *old_id != id) {
-            let ttl = match snapshot.expiry() {
+            let ttl = match session.expiry() {
                 Some(_) => {
-                    let Some(ttl) = snapshot.expires_in() else {
+                    let Some(ttl) = session.expires_in() else {
                         // Expired rotations revoke the source without creating
                         // a permanent replacement for an already-expired session.
                         let _: () = conn.del(self.key(old_id)).await?;
@@ -192,8 +191,8 @@ impl SessionStore for RedisStore {
         }
         let mut command = redis::cmd("SET");
         command.arg(self.key(&id)).arg(&json);
-        let ttl = snapshot.expires_in();
-        if snapshot.expiry().is_some() && ttl.is_none() {
+        let ttl = session.expires_in();
+        if session.expiry().is_some() && ttl.is_none() {
             let _: () = conn.del(self.key(&id)).await?;
             write.finish()?;
             return Ok(None);
