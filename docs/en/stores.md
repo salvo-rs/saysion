@@ -228,6 +228,12 @@ Storing the expiry as a unix-second integer keeps queries portable
 across all three databases without pulling in extra type-conversion
 features.
 
+MySQL creates the `session` column with `utf8mb4` explicitly, regardless of the
+database's default charset. Run `migrate()` after upgrading: it rejects existing
+non-`utf8mb4` session columns rather than silently replacing Unicode characters.
+Choose and perform any required schema/data conversion explicitly before use;
+the store never changes existing column encodings automatically.
+
 `migrate()` also adds an expiry index to existing tables and is safe to repeat.
 `cleanup()` deletes at most 1,000 rows per call. Use `cleanup_batch(limit)` with
 a limit from 1 to 10,000 to control each delete statement and obtain its deleted

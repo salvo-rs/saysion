@@ -498,7 +498,7 @@ pub use sqlite::SqlxSqliteStore;
 #[allow(missing_docs)]
 mod mysql {
     use super::*;
-    use sqlx::MySqlPool;
+    use sqlx::{MySqlPool, Row};
 
     use crate::{Result, Session, SessionStore, async_trait};
 
@@ -531,11 +531,27 @@ mod mysql {
                 "CREATE TABLE IF NOT EXISTS {table} (\
                     id VARCHAR(128) PRIMARY KEY NOT NULL, \
                     expires BIGINT NULL, \
-                    session TEXT NOT NULL\
+                    session TEXT CHARACTER SET utf8mb4 NOT NULL\
                 )",
                 table = self.table
             );
             sqlx::query(&sql).execute(&self.pool).await?;
+            // Connection encoding does not change the storage charset of an
+            // existing column. Reject incompatible legacy tables instead of
+            // allowing strict-mode failures or non-strict character replacement.
+            let column = sqlx::query(&format!(
+                "SHOW FULL COLUMNS FROM {} LIKE 'session'",
+                self.table
+            ))
+            .fetch_one(&self.pool)
+            .await?;
+            let collation: Option<String> = column.try_get("Collation")?;
+            anyhow::ensure!(
+                collation
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("utf8mb4_")),
+                "MySQL session column must use utf8mb4; migrate the existing column explicitly before using this store"
+            );
             let sql = format!(
                 "CREATE INDEX {} ON {} (expires, id)",
                 expiry_index_name(&self.table),
