@@ -24,8 +24,9 @@ fn expiry_datetime(expiry: &time::OffsetDateTime) -> BsonDateTime {
 /// internally, so a single [`Client`] (and therefore a single
 /// `MongoDbStore`) can be cloned cheaply and shared between tasks.
 /// Session lookups always read from the primary, even when the client prefers
-/// secondaries, so replication lag cannot restore a revoked session. Failover
-/// durability still depends on the client's read and write concern settings.
+/// secondaries, avoiding authentication from a lagging secondary after revocation.
+/// The client's read and write concerns still govern visibility and failover
+/// durability.
 #[derive(Clone)]
 pub struct MongoDbStore {
     client: Client,

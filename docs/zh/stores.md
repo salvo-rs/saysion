@@ -135,8 +135,8 @@ async fn main() -> saysion::Result {
 MongoDB 会自动清理过期会话。
 
 会话查找始终读取主节点，覆盖共享 Client 的读偏好，避免从延迟副本重新加载
-已撤销的会话。其他客户端设置（包括 read concern 和 write concern）继续生效；
-应按故障切换和注销要求选择合适的写入持久性。
+已撤销的会话。其他客户端设置继续生效；read concern 和 write concern 仍决定
+可见性和故障切换持久性，应按注销和故障切换要求选择。
 
 ## SQLx (PostgreSQL / SQLite / MySQL)
 

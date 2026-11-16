@@ -165,9 +165,9 @@ so a single `MongoDbStore` can be cloned and shared. Calling
 expired sessions automatically.
 
 Session lookups always use the primary, overriding a shared client's read
-preference so replication lag cannot reload a revoked session. Other client
-options, including read and write concerns, remain in effect; choose appropriate
-write durability for your failover and logout requirements.
+preference to avoid reloading a revoked session from a lagging secondary. Other
+client options remain in effect; read and write concerns still govern visibility
+and failover durability, so choose them for your logout and failover requirements.
 
 ## SQLx (PostgreSQL / SQLite / MySQL)
 
