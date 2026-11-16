@@ -96,7 +96,7 @@ impl RedisStore {
         let mut cursor = 0;
         let mut total = 0;
         loop {
-            let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+            let (next, keys): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("MATCH")
                 .arg(&pattern)
@@ -106,7 +106,7 @@ impl RedisStore {
                 .await?;
             total += keys
                 .iter()
-                .filter(|key| key.starts_with(&self.prefix))
+                .filter(|key| key.starts_with(self.prefix.as_bytes()))
                 .count();
             cursor = next;
             if cursor == 0 {
@@ -237,7 +237,7 @@ impl SessionStore for RedisStore {
         let pattern = prefix_pattern(&self.prefix);
         let mut cursor = 0;
         loop {
-            let (next, mut keys): (u64, Vec<String>) = redis::cmd("SCAN")
+            let (next, mut keys): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("MATCH")
                 .arg(&pattern)
@@ -245,7 +245,7 @@ impl SessionStore for RedisStore {
                 .arg(SCAN_BATCH_SIZE)
                 .query_async(&mut conn)
                 .await?;
-            keys.retain(|key| key.starts_with(&self.prefix));
+            keys.retain(|key| key.starts_with(self.prefix.as_bytes()));
             // COUNT is a scan hint, not a strict response-size guarantee.
             for batch in keys.chunks(SCAN_BATCH_SIZE) {
                 let _: usize = redis::cmd("UNLINK")
