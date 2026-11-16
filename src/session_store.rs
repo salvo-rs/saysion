@@ -24,6 +24,17 @@ impl std::error::Error for SessionConflict {}
 /// Deletion identifies the source to revoke, including an unsaved rotation.
 /// Backend existence and collision
 /// checks must remain atomic; see [`crate::SessionSave::origin`].
+///
+/// Built-in stores save complete snapshots: independent requests updating the
+/// same live identity do not merge fields or compare data revisions. The last
+/// backend write wins. [`SessionConflict`] detects identity/lifecycle conflicts,
+/// not every concurrent data update; application-level atomic state needs a
+/// separate version check or atomic backend operation.
+///
+/// Expiry is checked on load. An already-running request may extend an expiry
+/// and save while the physical record remains; a backend that has removed it
+/// rejects the update. This is not a backend-independent absolute-lifetime
+/// guarantee. Applications needing one must track a separate maximum lifetime.
 #[async_trait]
 pub trait SessionStore {
     /// Get a session from the storage backend.
