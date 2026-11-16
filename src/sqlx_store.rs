@@ -515,6 +515,10 @@ mod mysql {
 
     use crate::{Result, Session, SessionStore, async_trait};
 
+    // MySQL TEXT is byte-limited. Reject before dispatch even when the server's
+    // SQL mode would otherwise truncate the value and return only a warning.
+    const MAX_SESSION_JSON_BYTES: usize = 65_535;
+
     /// MySQL/MariaDB-backed session store.
     #[derive(Clone, Debug)]
     pub struct SqlxMySqlStore {
@@ -618,10 +622,16 @@ mod mysql {
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
-            let attempt = session.persistence_attempt()?;
-            let origin = attempt.origin.clone();
             let (snapshot, revision) = session.persistence_snapshot();
             let json = serde_json::to_string(&snapshot)?;
+            anyhow::ensure!(
+                json.len() <= MAX_SESSION_JSON_BYTES,
+                "serialized MySQL session exceeds the TEXT limit of {MAX_SESSION_JSON_BYTES} bytes"
+            );
+            // An entirely local size rejection has not attempted a backend
+            // write, so it must not consume a fresh session's insert authority.
+            let attempt = session.persistence_attempt()?;
+            let origin = attempt.origin.clone();
             let expires = expiry_unix(&snapshot);
             let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {

@@ -250,6 +250,12 @@ Storing the expiry as a unix-second integer keeps queries portable
 across all three databases without pulling in extra type-conversion
 features.
 
+MySQL's `TEXT` column limits the complete serialized session JSON to 65,535
+bytes, including keys, escaping, and metadata. The store rejects larger values
+before backend I/O, even if the server's SQL mode would permit truncation.
+Rejected values remain dirty; a local size rejection does not consume a fresh
+session's first-insert authority.
+
 `migrate()` also adds an expiry index to existing tables and is safe to repeat.
 `cleanup()` deletes at most 1,000 rows per call. Use `cleanup_batch(limit)` with
 a limit from 1 to 10,000 to control each delete statement and obtain its deleted
