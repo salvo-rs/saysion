@@ -4,7 +4,7 @@
 
 use mongodb::bson::{DateTime as BsonDateTime, doc};
 use mongodb::options::IndexOptions;
-use mongodb::{Client, Collection, Database, IndexModel};
+use mongodb::{Client, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, Session, SessionStore, async_trait};
@@ -25,7 +25,7 @@ fn expiry_datetime(expiry: &time::OffsetDateTime) -> BsonDateTime {
 /// `MongoDbStore`) can be cloned cheaply and shared between tasks.
 #[derive(Clone)]
 pub struct MongoDbStore {
-    database: Database,
+    database: mongodb::Database,
     collection: Collection<SessionDoc>,
 }
 
