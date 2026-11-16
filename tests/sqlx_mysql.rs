@@ -220,3 +220,90 @@ async fn mysql_nonstrict_overflow_does_not_acknowledge_or_replace_data() {
     assert!(!acknowledged, "rejected data must remain dirty");
     assert_eq!(original.as_deref(), Some("original"));
 }
+
+#[tokio::test]
+#[ignore = "requires MySQL; exercised by the backend CI job"]
+async fn mysql_unicode_roundtrips_under_strict_and_nonstrict_modes() {
+    use sqlx::Row;
+
+    let pool = sqlx::mysql::MySqlPoolOptions::new()
+        .max_connections(1)
+        .connect(&url())
+        .await
+        .unwrap();
+    let table = format!("saysion_unicode_{:016x}", rand::random::<u64>());
+    let store = SqlxMySqlStore::new(pool.clone()).with_table(&table);
+    store.migrate().await.unwrap();
+    let column = sqlx::query(&format!("SHOW FULL COLUMNS FROM {table} LIKE 'session'"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let collation: String = column.try_get("Collation").unwrap();
+    assert!(collation.starts_with("utf8mb4_"), "{collation}");
+    for mode in [
+        "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "NO_ENGINE_SUBSTITUTION",
+    ] {
+        sqlx::query("SET SESSION sql_mode = ?")
+            .bind(mode)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut session = Session::new();
+        session.insert("name", "中文😀").unwrap();
+        let cookie = store.store_session(session).await.unwrap().unwrap();
+        assert_eq!(
+            store
+                .load_session(cookie)
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>("name")
+                .as_deref(),
+            Some("中文😀"),
+            "Unicode must roundtrip under sql_mode={mode}"
+        );
+    }
+    sqlx::query(&format!("DROP TABLE {table}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MySQL; exercised by the backend CI job"]
+async fn mysql_migration_rejects_legacy_charsets_without_altering_data() {
+    let pool = sqlx::MySqlPool::connect(&url()).await.unwrap();
+    for charset in ["latin1", "utf8mb3"] {
+        let table = format!("saysion_charset_{:016x}", rand::random::<u64>());
+        sqlx::query(&format!(
+            "CREATE TABLE {table} (id VARCHAR(128) PRIMARY KEY NOT NULL, \
+             expires BIGINT NULL, session TEXT CHARACTER SET {charset} NOT NULL)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(&format!(
+            "INSERT INTO {table} (id, session) VALUES ('original', 'preserve this value')"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let store = SqlxMySqlStore::new(pool.clone()).with_table(&table);
+        let result = store.migrate().await;
+        let (value,): (String,) = sqlx::query_as(&format!(
+            "SELECT session FROM {table} WHERE id = 'original'"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(&format!("DROP TABLE {table}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(result.unwrap_err().to_string().contains("utf8mb4"));
+        assert_eq!(value, "preserve this value");
+    }
+    pool.close().await;
+}

@@ -213,6 +213,11 @@ let store = saysion::SqlxMySqlStore::from_url("mysql://root:root@127.0.0.1/myapp
 过期时间存为 unix 秒整数,使三种数据库的查询完全一致,也避免了
 为 sqlx 启用额外的时间类型转换 feature。
 
+MySQL 会显式使用 `utf8mb4` 创建 `session` 列，不继承数据库默认字符集。
+升级后应重新运行 `migrate()`：已有列若不是 `utf8mb4`，会返回错误，
+而不会允许 Unicode 被静默替换。应在使用前明确安排所需的 schema 与
+数据转换；存储不会自动修改已有列的编码。
+
 MySQL 的 `TEXT` 列限制完整序列化会话 JSON 不超过 65,535 字节，
 包括键、转义及元数据。存储会在后端 I/O 前拒绝超限值，即使服务端
 SQL mode 允许截断也不会确认成功。拒绝后数据仍标记为已修改；
