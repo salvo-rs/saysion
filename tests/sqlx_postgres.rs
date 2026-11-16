@@ -121,3 +121,75 @@ async fn pg_destroy_and_clear() {
     assert_eq!(store.count().await.unwrap(), 0);
     store.finish().await;
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; exercised by the backend CI job"]
+async fn pg_concurrent_first_migrations_create_one_usable_table() {
+    use std::sync::Arc;
+
+    // Exercise separate connections and actual migrate() calls, rather than
+    // substituting an external CREATE that does not participate in coordination.
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&url())
+        .await
+        .unwrap();
+    let table = format!("saysion_migration_{:016x}", rand::random::<u64>());
+    let barrier = Arc::new(tokio::sync::Barrier::new(8));
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let store = SqlxPostgresStore::new(pool.clone()).with_table(&table);
+        let barrier = barrier.clone();
+        tasks.spawn(async move {
+            barrier.wait().await;
+            store.migrate().await
+        });
+    }
+    let outcome = tokio::time::timeout(Duration::from_secs(15), async {
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap().unwrap();
+        }
+    })
+    .await;
+    let store = SqlxPostgresStore::new(pool.clone()).with_table(&table);
+    if outcome.is_ok() {
+        let cookie = store.store_session(Session::new()).await.unwrap().unwrap();
+        assert!(store.load_session(cookie).await.unwrap().is_some());
+    }
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    outcome.expect("concurrent migrations must complete without deadlock");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; exercised by the backend CI job"]
+async fn pg_failed_migration_rolls_back_and_releases_coordination() {
+    let pool = sqlx::PgPool::connect(&url()).await.unwrap();
+    let table = format!("saysion_failed_migration_{:016x}", rand::random::<u64>());
+    // An existing incompatible relation makes CREATE INDEX fail after the lock
+    // has been acquired. Dropping the transaction must not strand that lock.
+    sqlx::query(&format!("CREATE TABLE {table} (id TEXT PRIMARY KEY)"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let store = SqlxPostgresStore::new(pool.clone()).with_table(&table);
+    assert!(store.migrate().await.is_err());
+    sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN expires BIGINT"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), store.migrate())
+        .await
+        .expect("the failed migration must release its advisory lock")
+        .unwrap();
+    sqlx::query(&format!("DROP TABLE {table}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+}

@@ -99,7 +99,19 @@ mod pg {
         }
 
         /// Create the sessions table if it does not yet exist.
+        ///
+        /// Concurrent migrations in the same database are serialized through a
+        /// transaction-scoped advisory lock, including table and index creation.
         pub async fn migrate(&self) -> Result {
+            let mut transaction = self.pool.begin().await?;
+            // Use one database-local lock for all saysion DDL. This also covers
+            // differently quoted or schema-qualified names for the same table,
+            // including a relation that does not exist yet. IF NOT EXISTS alone
+            // does not serialize PostgreSQL's system-catalog inserts.
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(0x7361_7973_696f_6e01_i64)
+                .execute(&mut *transaction)
+                .await?;
             let sql = format!(
                 "CREATE TABLE IF NOT EXISTS {table} (\
                     id TEXT PRIMARY KEY NOT NULL, \
@@ -108,13 +120,14 @@ mod pg {
                 )",
                 table = self.table
             );
-            sqlx::query(&sql).execute(&self.pool).await?;
+            sqlx::query(&sql).execute(&mut *transaction).await?;
             let sql = format!(
                 "CREATE INDEX IF NOT EXISTS {} ON {} (expires, id) WHERE expires IS NOT NULL",
                 expiry_index_name(&self.table),
                 self.table
             );
-            sqlx::query(&sql).execute(&self.pool).await?;
+            sqlx::query(&sql).execute(&mut *transaction).await?;
+            transaction.commit().await?;
             Ok(())
         }
 
