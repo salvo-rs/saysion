@@ -130,6 +130,21 @@ let store = saysion::RedisStore::new_with_config(
 ).await?;
 ```
 
+### Namespaced maintenance
+
+`count()` and `clear_store()` use incremental `SCAN` calls. Redis applies the
+literal prefix as a filter; it does not provide a prefix index, so a complete
+iteration still visits the entire database keyspace. A selective prefix in a
+large shared database can therefore require many calls that return no keys.
+The `COUNT` hint controls typical work per call, not total work, memory, or an
+overall deadline. Use a dedicated database or instance when unrelated keys
+dominate, and set an outer deadline appropriate for maintenance operations.
+
+Counting is an estimate during concurrent writes. Clearing is not atomic:
+quiesce writers when a complete clear is required. Only keys matching the
+configured literal prefix are removed; an empty prefix matches the entire
+database. See the [Redis SCAN documentation](https://redis.io/docs/latest/commands/scan/).
+
 ## MongoDB
 
 ```toml
