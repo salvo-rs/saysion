@@ -107,3 +107,81 @@ async fn cleanup_batches_are_bounded_and_preserve_live_rows() {
     assert_eq!(store.count().await.unwrap(), 5);
     assert_eq!(store.cleanup_batch(10_000).await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn equivalent_table_names_reuse_the_existing_expiry_index() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    sqlx::query("ATTACH DATABASE ':memory:' AS \"other.db\"")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for aliases in [
+        ["sessions", "main.sessions", "\"main\".\"SESSIONS\""],
+        [
+            "\"other.db\".\"session.table\"",
+            "[other.db].[session.table]",
+            "`other.db`.`SESSION.TABLE`",
+        ],
+    ] {
+        for alias in aliases {
+            SqlxSqliteStore::new(pool.clone())
+                .with_table(alias)
+                .migrate()
+                .await
+                .unwrap();
+        }
+    }
+    for schema in ["main", "\"other.db\""] {
+        let (indexes,): (i64,) = sqlx::query_as(&format!(
+            "SELECT COUNT(*) FROM {schema}.sqlite_master \
+             WHERE type = 'index' AND name LIKE 'saysion_expiry_%'"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(indexes, 1);
+    }
+}
+
+#[tokio::test]
+async fn unrelated_partial_or_prefix_columns_do_not_replace_the_expiry_index() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    for (table, unsuitable) in [
+        ("wrong_partial", "(expires, id) WHERE expires > 100"),
+        ("wrong_order", "(id, expires)"),
+        ("wrong_collation", "(expires, id COLLATE NOCASE)"),
+    ] {
+        sqlx::query(&format!(
+            "CREATE TABLE {table} (id TEXT PRIMARY KEY NOT NULL, expires INTEGER, session TEXT NOT NULL)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(&format!(
+            "CREATE INDEX user_{table} ON {table} {unsuitable}"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        SqlxSqliteStore::new(pool.clone())
+            .with_table(table)
+            .migrate()
+            .await
+            .unwrap();
+        let (indexes,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+        )
+        .bind(table)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            indexes, 2,
+            "preserve user index and add usable index for {table}"
+        );
+    }
+}

@@ -155,3 +155,74 @@ async fn mysql_migration_is_idempotent_and_cleanup_is_bounded() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires MySQL; exercised by the backend CI job"]
+async fn mysql_equivalent_table_names_reuse_the_expiry_index() {
+    use sqlx::Row;
+
+    let store = fresh_store().await;
+    let (database,): (String,) = sqlx::query_as("SELECT DATABASE()")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let qualified = format!("`{}`.`{}`", database.replace('`', "``"), store.table);
+    SqlxMySqlStore::new(store.pool.clone())
+        .with_table(&qualified)
+        .migrate()
+        .await
+        .unwrap();
+    let rows = sqlx::query(&format!("SHOW INDEX FROM {qualified}"))
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+    let names: std::collections::HashSet<String> = rows
+        .iter()
+        .map(|row| row.try_get("Key_name").unwrap())
+        .filter(|name: &String| name.starts_with("saysion_expiry_"))
+        .collect();
+    assert_eq!(names.len(), 1);
+    store.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MySQL; exercised by the backend CI job"]
+async fn mysql_prefix_index_does_not_replace_the_full_expiry_index() {
+    use sqlx::Row;
+
+    let pool = sqlx::MySqlPool::connect(&url()).await.unwrap();
+    let table = format!("saysion_prefix_{:016x}", rand::random::<u64>());
+    sqlx::query(&format!(
+        "CREATE TABLE {table} (id VARCHAR(128) PRIMARY KEY NOT NULL, expires BIGINT, session TEXT NOT NULL)"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(&format!(
+        "CREATE INDEX user_{table} ON {table} (expires,id(4))"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let store = SqlxMySqlStore::new(pool.clone()).with_table(&table);
+    store.migrate().await.unwrap();
+    let rows = sqlx::query(&format!("SHOW INDEX FROM {table}"))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    let names: std::collections::HashSet<String> = rows
+        .iter()
+        .map(|row| row.try_get("Key_name").unwrap())
+        .filter(|name: &String| name != "PRIMARY")
+        .collect();
+    sqlx::query(&format!("DROP TABLE {table}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    assert_eq!(
+        names.len(),
+        2,
+        "preserve prefix index and add full cleanup index"
+    );
+}
