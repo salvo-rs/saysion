@@ -59,7 +59,10 @@ def restore(directory):
         raise RuntimeError("Release checkout does not match the verified commit")
     if metadata["rustc"] != command("rustc", "--version"):
         raise RuntimeError("Release toolchain does not match the verified toolchain")
-    shutil.copyfile(directory / "Cargo.lock", ROOT / "Cargo.lock")
+    source = directory / "Cargo.lock"
+    destination = ROOT / "Cargo.lock"
+    if source.resolve() != destination.resolve():
+        shutil.copyfile(source, destination)
 
 
 def main():

@@ -97,6 +97,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: verified-release
+          path: ${{ runner.temp }}/saysion-verified-release
 
       - name: Restore verified dependency resolution
         run: python3 scripts/release_artifacts.py restore "${{ steps.release_inputs.outputs.download-path }}"

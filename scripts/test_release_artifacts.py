@@ -45,6 +45,36 @@ class ReleaseArtifactTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         release_artifacts.restore(destination)
 
+    def test_restore_verified_inputs_from_a_separate_artifact_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checkout, downloaded = Path(directory) / "checkout", Path(directory) / "downloaded"
+            checkout.mkdir()
+            downloaded.mkdir()
+            (downloaded / "metadata.json").write_text(
+                json.dumps({"commit": "verified", "rustc": "rustc 1.95.0"}), encoding="utf-8"
+            )
+            (downloaded / "Cargo.lock").write_bytes(b"verified lockfile")
+            with patch("release_artifacts.ROOT", checkout), patch(
+                "release_artifacts.command", side_effect=("verified", "rustc 1.95.0")
+            ):
+                release_artifacts.restore(downloaded)
+            self.assertEqual((checkout / "Cargo.lock").read_bytes(), b"verified lockfile")
+            self.assertFalse((checkout / "metadata.json").exists())
+
+    def test_restore_already_in_checkout_keeps_the_verified_lockfile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            (destination / "metadata.json").write_text(
+                json.dumps({"commit": "verified", "rustc": "rustc 1.95.0"}), encoding="utf-8"
+            )
+            lockfile = destination / "Cargo.lock"
+            lockfile.write_bytes(b"verified lockfile")
+            with patch("release_artifacts.ROOT", destination), patch(
+                "release_artifacts.command", side_effect=("verified", "rustc 1.95.0")
+            ):
+                release_artifacts.restore(destination)
+            self.assertEqual(lockfile.read_bytes(), b"verified lockfile")
+
 
 if __name__ == "__main__":
     unittest.main()
