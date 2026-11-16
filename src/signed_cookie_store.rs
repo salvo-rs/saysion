@@ -127,17 +127,22 @@ impl SessionStore for SignedCookieStore {
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
-        // A bounded buffer rejects oversized sessions without allocating an
-        // arbitrarily large serialized payload first.
-        let mut buffer = vec![0; MAX_BINARY_LEN - TAG_LEN];
-        let (payload, revision) = session.serialize_bounded(&mut buffer)?;
-        let tag = Self::mac(&self.signing_key, payload)
-            .finalize()
-            .into_bytes();
-        let mut bytes = Vec::with_capacity(TAG_LEN + payload.len());
-        bytes.extend_from_slice(&tag);
-        bytes.extend_from_slice(payload);
-        let cookie = format!("{PREFIX}{}", BASE64_STANDARD.encode(bytes));
+        // Bound serialization before allocating output. Tag and payload share
+        // one stack buffer, and Base64 appends directly to the final String.
+        let mut buffer = [0; MAX_BINARY_LEN];
+        let (payload_len, revision) = {
+            let (tag_buffer, payload_buffer) = buffer.split_at_mut(TAG_LEN);
+            let (payload, revision) = session.serialize_bounded(payload_buffer)?;
+            let tag = Self::mac(&self.signing_key, payload)
+                .finalize()
+                .into_bytes();
+            tag_buffer.copy_from_slice(&tag);
+            (payload.len(), revision)
+        };
+        let binary_len = TAG_LEN + payload_len;
+        let mut cookie = String::with_capacity(PREFIX.len() + binary_len.div_ceil(3) * 4);
+        cookie.push_str(PREFIX);
+        BASE64_STANDARD.encode_string(&buffer[..binary_len], &mut cookie);
         session.acknowledge_revision(revision);
         Ok(Some(cookie))
     }
@@ -156,6 +161,40 @@ mod tests {
     use super::*;
 
     const KEY: [u8; 32] = [42; 32];
+
+    #[tokio::test]
+    async fn largest_payload_keeps_the_existing_wire_format_and_size_limit() -> Result {
+        let store = SignedCookieStore::new(KEY)?;
+        let mut session = Session::new();
+        let mut largest = 0;
+        for len in MAX_BINARY_LEN - 128..MAX_BINARY_LEN {
+            session.insert_raw("large", "A".repeat(len));
+            if postcard::to_stdvec(&session)?.len() <= MAX_BINARY_LEN - TAG_LEN {
+                largest = len;
+            }
+        }
+        assert!(largest > 0);
+        session.insert_raw("large", "A".repeat(largest));
+        let payload = postcard::to_stdvec(&session)?;
+        let tag = SignedCookieStore::mac(&store.signing_key, &payload)
+            .finalize()
+            .into_bytes();
+        let mut expected = tag.to_vec();
+        expected.extend_from_slice(&payload);
+        let cookie = store.store_session(session.clone()).await?.unwrap();
+        assert_eq!(
+            cookie,
+            format!("{PREFIX}{}", BASE64_STANDARD.encode(expected))
+        );
+        assert!(cookie.len() <= MAX_VALUE_LEN);
+        assert!(store.load_session(cookie).await?.is_some());
+        assert!(!session.data_changed());
+
+        session.insert_raw("large", "A".repeat(largest + 1));
+        assert!(store.store_session(session.clone()).await.is_err());
+        assert!(session.data_changed());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn authenticated_roundtrip_and_expiry() -> Result {
