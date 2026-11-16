@@ -164,6 +164,11 @@ so a single `MongoDbStore` can be cloned and shared. Calling
 `initialize()` creates a TTL index on `expires_at` so MongoDB purges
 expired sessions automatically.
 
+Session lookups always use the primary, overriding a shared client's read
+preference so replication lag cannot reload a revoked session. Other client
+options, including read and write concerns, remain in effect; choose appropriate
+write durability for your failover and logout requirements.
+
 ## SQLx (PostgreSQL / SQLite / MySQL)
 
 Pick the feature(s) for the database(s) you actually use:
