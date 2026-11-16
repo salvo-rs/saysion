@@ -3,7 +3,7 @@
 //! Enabled by the `mongodb` cargo feature.
 
 use mongodb::bson::{DateTime as BsonDateTime, doc};
-use mongodb::options::IndexOptions;
+use mongodb::options::{IndexOptions, ReadPreference};
 use mongodb::{Client, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
@@ -23,11 +23,14 @@ fn expiry_datetime(expiry: &time::OffsetDateTime) -> BsonDateTime {
 /// The official `mongodb` driver maintains its own connection pool
 /// internally, so a single [`Client`] (and therefore a single
 /// `MongoDbStore`) can be cloned cheaply and shared between tasks.
+/// Session lookups always read from the primary, even when the client prefers
+/// secondaries, avoiding authentication from a lagging secondary after revocation.
+/// The client's read and write concerns still govern visibility and failover
+/// durability.
 #[derive(Clone)]
 pub struct MongoDbStore {
-    client: Client,
-    db: String,
-    coll_name: String,
+    database: mongodb::Database,
+    collection: Collection<SessionDoc>,
 }
 
 impl std::fmt::Debug for MongoDbStore {
@@ -36,8 +39,8 @@ impl std::fmt::Debug for MongoDbStore {
         // credentials (for example SOCKS5 proxy authentication). Never expand
         // the client, even if a particular driver's ordinary credentials redact.
         f.debug_struct("MongoDbStore")
-            .field("db", &self.db)
-            .field("coll_name", &self.coll_name)
+            .field("db", &self.database.name())
+            .field("coll_name", &self.collection.name())
             .finish_non_exhaustive()
     }
 }
@@ -53,10 +56,11 @@ struct SessionDoc {
 impl MongoDbStore {
     /// Create a store from an existing [`Client`].
     pub fn new(client: Client, db: impl Into<String>) -> Self {
+        let database = client.database(&db.into());
+        let collection = database.collection(DEFAULT_COLLECTION);
         Self {
-            client,
-            db: db.into(),
-            coll_name: DEFAULT_COLLECTION.to_string(),
+            database,
+            collection,
         }
     }
 
@@ -67,12 +71,12 @@ impl MongoDbStore {
 
     /// Use a custom collection name. Defaults to `saysion_sessions`.
     pub fn with_collection(mut self, coll: impl Into<String>) -> Self {
-        self.coll_name = coll.into();
+        self.collection = self.database.collection(&coll.into());
         self
     }
 
-    fn coll(&self) -> Collection<SessionDoc> {
-        self.client.database(&self.db).collection(&self.coll_name)
+    fn coll(&self) -> &Collection<SessionDoc> {
+        &self.collection
     }
 
     /// Create a TTL index on `expires_at` so MongoDB will purge
@@ -91,9 +95,13 @@ impl MongoDbStore {
         Ok(())
     }
 
-    /// Returns the number of stored sessions.
+    /// Returns the exact number of stored sessions using the `_id` index.
     pub async fn count(&self) -> Result<u64> {
-        Ok(self.coll().count_documents(doc! {}).await?)
+        Ok(self
+            .coll()
+            .count_documents(doc! {})
+            .hint(mongodb::options::Hint::Name("_id_".to_owned()))
+            .await?)
     }
 }
 
@@ -102,7 +110,11 @@ impl SessionStore for MongoDbStore {
     async fn load_session(&self, cookie_value: String) -> Result<Option<Session>> {
         let id = Session::id_from_cookie_value(&cookie_value)?;
         tracing::debug!("loading session by id `{}`", id);
-        let found = self.coll().find_one(doc! { "_id": &id }).await?;
+        let found = self
+            .coll()
+            .find_one(doc! { "_id": &id })
+            .selection_criteria(ReadPreference::Primary.into())
+            .await?;
         match found {
             None => Ok(None),
             Some(d) => serde_json::from_str::<Session>(&d.session)?.validate_loaded(&cookie_value),
