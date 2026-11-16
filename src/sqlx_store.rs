@@ -498,9 +498,76 @@ pub use sqlite::SqlxSqliteStore;
 #[allow(missing_docs)]
 mod mysql {
     use super::*;
-    use sqlx::MySqlPool;
+    use sqlx::{MySqlPool, Row};
 
     use crate::{Result, Session, SessionStore, async_trait};
+
+    fn table_status_target(table: &str) -> (String, String) {
+        let mut quoted = None;
+        let mut characters = table.char_indices().peekable();
+        let mut separator = None;
+        while let Some((position, character)) = characters.next() {
+            if let Some(delimiter) = quoted {
+                if character == delimiter {
+                    if characters
+                        .peek()
+                        .is_some_and(|(_, next)| *next == delimiter)
+                    {
+                        characters.next();
+                    } else {
+                        quoted = None;
+                    }
+                }
+            } else if matches!(character, '`' | '"') {
+                quoted = Some(character);
+            } else if character == '.' {
+                separator = Some(position);
+                break;
+            }
+        }
+        let (database, name) = match separator {
+            Some(position) => (
+                format!("FROM {}", table[..position].trim()),
+                table[position + 1..].trim(),
+            ),
+            None => (String::new(), table.trim()),
+        };
+        let name = if let Some(value) = name.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
+            value.replace("``", "`")
+        } else if let Some(value) = name.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            value.replace("\"\"", "\"")
+        } else {
+            name.to_owned()
+        };
+        (database, name)
+    }
+
+    #[cfg(test)]
+    mod migration_tests {
+        #[test]
+        fn status_lookup_preserves_qualified_and_quoted_identifiers() {
+            for (table, database, name) in [
+                ("sessions", "", "sessions"),
+                ("app.sessions", "FROM app", "sessions"),
+                ("`app.db`.`session.table`", "FROM `app.db`", "session.table"),
+                (
+                    "`app``db`.`session``table`",
+                    "FROM `app``db`",
+                    "session`table",
+                ),
+                (
+                    "\"app.db\".\"session.table\"",
+                    "FROM \"app.db\"",
+                    "session.table",
+                ),
+            ] {
+                assert_eq!(
+                    super::table_status_target(table),
+                    (database.to_owned(), name.to_owned())
+                );
+            }
+        }
+    }
 
     /// MySQL/MariaDB-backed session store.
     #[derive(Clone, Debug)]
@@ -527,21 +594,42 @@ mod mysql {
         }
 
         pub async fn migrate(&self) -> Result {
+            let mut connection = self.pool.acquire().await?;
             let sql = format!(
                 "CREATE TABLE IF NOT EXISTS {table} (\
                     id VARCHAR(128) PRIMARY KEY NOT NULL, \
                     expires BIGINT NULL, \
                     session TEXT NOT NULL\
-                )",
+                ) ENGINE=InnoDB",
                 table = self.table
             );
-            sqlx::query(&sql).execute(&self.pool).await?;
+            sqlx::query(&sql).execute(&mut *connection).await?;
+            let (database, name) = table_status_target(&self.table);
+            let statuses = sqlx::query(&format!("SHOW TABLE STATUS {database} WHERE Name = ?"))
+                .bind(&name)
+                .fetch_all(&mut *connection)
+                .await?;
+            // Metadata collation can match more than one case-sensitive table.
+            // Prefer the exact name; a sole folded match covers deployments
+            // configured with lower_case_table_names.
+            let status = statuses
+                .iter()
+                .find(|row| row.try_get::<&str, _>("Name").ok() == Some(name.as_str()))
+                .or_else(|| (statuses.len() == 1).then(|| &statuses[0]))
+                .ok_or_else(|| anyhow::anyhow!("could not identify MySQL session table"))?;
+            let engine: Option<String> = status.try_get("Engine")?;
+            anyhow::ensure!(
+                engine
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("InnoDB")),
+                "MySQL session table must use InnoDB for atomic rotation; convert the existing table explicitly before using this store"
+            );
             let sql = format!(
                 "CREATE INDEX {} ON {} (expires, id)",
                 expiry_index_name(&self.table),
                 self.table
             );
-            if let Err(error) = sqlx::query(&sql).execute(&self.pool).await {
+            if let Err(error) = sqlx::query(&sql).execute(&mut *connection).await {
                 // MySQL has no CREATE INDEX IF NOT EXISTS. Only suppress the
                 // precise duplicate-index error, including concurrent startups.
                 let duplicate = error

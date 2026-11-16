@@ -196,6 +196,11 @@ let store = saysion::SqlxMySqlStore::from_url("mysql://root:root@127.0.0.1/myapp
 过期时间存为 unix 秒整数,使三种数据库的查询完全一致,也避免了
 为 sqlx 启用额外的时间类型转换 feature。
 
+MySQL 会话表必须使用 InnoDB，才能保证轮换操作的事务回滚。
+`migrate()` 显式创建 InnoDB 新表，并拒绝其他引擎的已有表。
+升级后应重新运行检查，在使用前明确安排所需的引擎转换；
+存储不会自动转换已有表或数据。
+
 `migrate()` 还会为已有表添加过期索引，可以重复调用。
 `cleanup()` 每次最多删除 1,000 条记录；`cleanup_batch(limit)` 允许指定
 1 到 10,000 条的上限，并返回删除数量。两者每次只执行一批，不会循环清空

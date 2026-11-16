@@ -228,6 +228,11 @@ Storing the expiry as a unix-second integer keeps queries portable
 across all three databases without pulling in extra type-conversion
 features.
 
+MySQL session tables must use InnoDB for transactional rotation. `migrate()`
+explicitly creates new InnoDB tables and rejects existing tables using another
+engine. Run it after upgrading; arrange any required engine conversion explicitly
+before use. The store never converts existing tables or data automatically.
+
 `migrate()` also adds an expiry index to existing tables and is safe to repeat.
 `cleanup()` deletes at most 1,000 rows per call. Use `cleanup_batch(limit)` with
 a limit from 1 to 10,000 to control each delete statement and obtain its deleted
