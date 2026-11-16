@@ -136,6 +136,9 @@ MongoDB 会自动清理过期会话。
 
 ## SQLx (PostgreSQL / SQLite / MySQL)
 
+SQLite 后端当前有一项[尚未修复的依赖安全公告](../dependency-security.md#open-sqlite-advisory)。
+触发条件涉及打开不可信的数据库及 WAL 文件；启用前请核对文件权限和部署实际链接的 SQLite 版本。
+
 按需启用对应数据库的 feature(可以同时启用多个):
 
 ```toml

@@ -166,6 +166,10 @@ expired sessions automatically.
 
 ## SQLx (PostgreSQL / SQLite / MySQL)
 
+The SQLite backend currently has an [open dependency security advisory](../dependency-security.md#open-sqlite-advisory).
+It concerns opening untrusted database/WAL files; review the file permissions
+and the actual SQLite library used by your deployment before enabling it.
+
 Pick the feature(s) for the database(s) you actually use:
 
 ```toml
