@@ -129,9 +129,8 @@ impl SessionStore for MongoDbStore {
         if session.is_destroyed() {
             return Err(crate::SessionConflict.into());
         }
-        let (snapshot, revision) = session.persistence_snapshot();
-        let json = serde_json::to_string(&snapshot)?;
-        let expires_at = snapshot.expiry().map(expiry_datetime);
+        let (json, revision) = session.serialize_json()?;
+        let expires_at = session.expiry().map(expiry_datetime);
         let doc_value = SessionDoc {
             id: id.clone(),
             expires_at,

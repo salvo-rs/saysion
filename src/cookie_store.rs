@@ -44,8 +44,7 @@ impl SessionStore for CookieStore {
         if session.is_destroyed() {
             return Err(crate::SessionConflict.into());
         }
-        let (snapshot, revision) = session.persistence_snapshot();
-        let serialized = postcard::to_stdvec(&snapshot)?;
+        let (serialized, revision) = session.serialize_postcard()?;
         let cookie = BASE64_STANDARD.encode(serialized);
         if session.is_destroyed() {
             return Err(crate::SessionConflict.into());

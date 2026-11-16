@@ -192,9 +192,8 @@ mod pg {
             let id = session.id().to_string();
             let attempt = session.persistence_attempt()?;
             let origin = attempt.origin.clone();
-            let (snapshot, revision) = session.persistence_snapshot();
-            let json = serde_json::to_string(&snapshot)?;
-            let expires = expiry_unix(&snapshot);
+            let (json, revision) = session.serialize_json()?;
+            let expires = expiry_unix(&session);
             let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {
                 let mut tx = self.pool.begin().await?;
@@ -420,9 +419,8 @@ mod sqlite {
             let id = session.id().to_string();
             let attempt = session.persistence_attempt()?;
             let origin = attempt.origin.clone();
-            let (snapshot, revision) = session.persistence_snapshot();
-            let json = serde_json::to_string(&snapshot)?;
-            let expires = expiry_unix(&snapshot);
+            let (json, revision) = session.serialize_json()?;
+            let expires = expiry_unix(&session);
             let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {
                 let mut tx = self.pool.begin().await?;
@@ -622,8 +620,7 @@ mod mysql {
 
         async fn store_session(&self, session: Session) -> Result<Option<String>> {
             let id = session.id().to_string();
-            let (snapshot, revision) = session.persistence_snapshot();
-            let json = serde_json::to_string(&snapshot)?;
+            let (json, revision) = session.serialize_json()?;
             anyhow::ensure!(
                 json.len() <= MAX_SESSION_JSON_BYTES,
                 "serialized MySQL session exceeds the TEXT limit of {MAX_SESSION_JSON_BYTES} bytes"
@@ -632,7 +629,7 @@ mod mysql {
             // write, so it must not consume a fresh session's insert authority.
             let attempt = session.persistence_attempt()?;
             let origin = attempt.origin.clone();
-            let expires = expiry_unix(&snapshot);
+            let expires = expiry_unix(&session);
             let mut write = session.begin_backend_write(&origin, true).await?;
             if let Some(origin) = origin.as_deref().filter(|origin| *origin != id.as_str()) {
                 let mut tx = self.pool.begin().await?;
