@@ -91,6 +91,8 @@ impl RedisStore {
     /// The prefix is matched literally, including Redis glob characters.
     /// The count is an estimate while keys are concurrently modified, since
     /// `SCAN` can return duplicates or omit keys added during iteration.
+    /// A complete iteration visits the database keyspace even for a selective
+    /// prefix; the scan batch hint does not bound total work or elapsed time.
     pub async fn count(&self) -> Result<usize> {
         let mut conn = self.conn.clone();
         let pattern = prefix_pattern(&self.prefix);
@@ -232,6 +234,8 @@ impl SessionStore for RedisStore {
     /// Requires Redis 4 or later. This operation is not atomic: writes made
     /// during the scan may survive or be removed. Quiesce writers if a complete
     /// clear is required. An empty prefix intentionally matches the whole DB.
+    /// Scanning visits the database keyspace even with a nonempty prefix.
+    /// Consider a dedicated database or instance when unrelated keys dominate.
     async fn clear_store(&self) -> Result {
         tracing::debug!("clearing redis store with prefix `{}`", self.prefix);
         let mut conn = self.conn.clone();
