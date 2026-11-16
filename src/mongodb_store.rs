@@ -4,7 +4,7 @@
 
 use mongodb::bson::{DateTime as BsonDateTime, doc};
 use mongodb::options::IndexOptions;
-use mongodb::{Client, Collection, IndexModel};
+use mongodb::{Client, Collection, Database, IndexModel};
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, Session, SessionStore, async_trait};
@@ -25,9 +25,8 @@ fn expiry_datetime(expiry: &time::OffsetDateTime) -> BsonDateTime {
 /// `MongoDbStore`) can be cloned cheaply and shared between tasks.
 #[derive(Clone)]
 pub struct MongoDbStore {
-    client: Client,
-    db: String,
-    coll_name: String,
+    database: Database,
+    collection: Collection<SessionDoc>,
 }
 
 impl std::fmt::Debug for MongoDbStore {
@@ -36,8 +35,8 @@ impl std::fmt::Debug for MongoDbStore {
         // credentials (for example SOCKS5 proxy authentication). Never expand
         // the client, even if a particular driver's ordinary credentials redact.
         f.debug_struct("MongoDbStore")
-            .field("db", &self.db)
-            .field("coll_name", &self.coll_name)
+            .field("db", &self.database.name())
+            .field("coll_name", &self.collection.name())
             .finish_non_exhaustive()
     }
 }
@@ -53,10 +52,11 @@ struct SessionDoc {
 impl MongoDbStore {
     /// Create a store from an existing [`Client`].
     pub fn new(client: Client, db: impl Into<String>) -> Self {
+        let database = client.database(&db.into());
+        let collection = database.collection(DEFAULT_COLLECTION);
         Self {
-            client,
-            db: db.into(),
-            coll_name: DEFAULT_COLLECTION.to_string(),
+            database,
+            collection,
         }
     }
 
@@ -67,12 +67,12 @@ impl MongoDbStore {
 
     /// Use a custom collection name. Defaults to `saysion_sessions`.
     pub fn with_collection(mut self, coll: impl Into<String>) -> Self {
-        self.coll_name = coll.into();
+        self.collection = self.database.collection(&coll.into());
         self
     }
 
-    fn coll(&self) -> Collection<SessionDoc> {
-        self.client.database(&self.db).collection(&self.coll_name)
+    fn coll(&self) -> &Collection<SessionDoc> {
+        &self.collection
     }
 
     /// Create a TTL index on `expires_at` so MongoDB will purge
@@ -91,9 +91,13 @@ impl MongoDbStore {
         Ok(())
     }
 
-    /// Returns the number of stored sessions.
+    /// Returns the exact number of stored sessions using the `_id` index.
     pub async fn count(&self) -> Result<u64> {
-        Ok(self.coll().count_documents(doc! {}).await?)
+        Ok(self
+            .coll()
+            .count_documents(doc! {})
+            .hint(mongodb::options::Hint::Name("_id_".to_owned()))
+            .await?)
     }
 }
 
