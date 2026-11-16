@@ -860,7 +860,12 @@ impl Session {
         }
     }
 
-    /// assigns the expiry timestamp to a duration from the current time.
+    /// Assign the expiry timestamp to a duration from the current time.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ttl` cannot be represented as a supported expiry timestamp.
+    /// Use [`Self::try_expire_in`] for durations from configuration or user input.
     ///
     /// # Example
     ///
@@ -875,7 +880,24 @@ impl Session {
     /// # Ok(()) }
     /// ```
     pub fn expire_in(&mut self, ttl: std::time::Duration) {
-        self.set_expiry(DateTime::now_utc() + ttl);
+        self.try_expire_in(ttl)
+            .expect("session expiry exceeds the supported date range");
+    }
+
+    /// Assign an expiry relative to now without panicking on an excessive TTL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the duration or resulting timestamp is outside the
+    /// supported range. The existing expiry and change tracking are preserved
+    /// on error; an excessive TTL never turns the session into a permanent one.
+    pub fn try_expire_in(&mut self, ttl: std::time::Duration) -> crate::Result {
+        let ttl = time::Duration::try_from(ttl)?;
+        let expiry = DateTime::now_utc()
+            .checked_add(ttl)
+            .ok_or_else(|| anyhow::anyhow!("session expiry exceeds the supported date range"))?;
+        self.set_expiry(expiry);
+        Ok(())
     }
 
     /// Returns true when the expiry timestamp is in the past, and false

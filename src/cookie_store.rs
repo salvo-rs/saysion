@@ -19,6 +19,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 /// `destroy_session` and `clear_store` are no-ops. Removing a browser cookie
 /// does not revoke a copied value: it can be replayed until its authenticated
 /// expiry. Use a server-side store when immediate revocation is required.
+/// Saving a locally destroyed session returns [`crate::SessionConflict`]
+/// instead of producing another cookie; this does not revoke older values.
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct CookieStore;
@@ -39,8 +41,14 @@ impl SessionStore for CookieStore {
     }
 
     async fn store_session(&self, session: Session) -> Result<Option<String>> {
+        if session.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
         let (serialized, revision) = session.serialize_postcard()?;
         let cookie = BASE64_STANDARD.encode(serialized);
+        if session.is_destroyed() {
+            return Err(crate::SessionConflict.into());
+        }
         session.acknowledge_revision(revision);
         Ok(Some(cookie))
     }

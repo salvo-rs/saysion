@@ -56,6 +56,8 @@ This crate uses ``#![deny(unsafe_code)]`` to ensure everything is implemented in
 Want to join us? Check out our ["Contributing" guide][contributing] and take a
 look at some of these issues:
 
+[contributing]: .github/CONTRIBUTING.md
+
 ## Acknowledgements
 
 This work is based on the work initiated by
