@@ -25,6 +25,38 @@ requests and weekly, and fails on new vulnerabilities, unsoundness notices,
 unmaintained packages, or yanked versions. The single exception below is explicit
 and must be reviewed separately; it does not suppress other RSA advisories.
 
+## Open SQLite advisory
+
+As of **2026-11-16**, the optional `sqlx-sqlite` backend resolves
+`sqlx-sqlite 0.8.6` and its bundled `libsqlite3-sys 0.30.1`.
+[RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459.html)
+affects that bundled SQLite source. `cargo audit --deny warnings` currently fails
+on this advisory. It is **not ignored**, and this notice is not a dependency fix.
+
+The reported memory disclosure requires opening a database file and its sibling
+WAL file that a less trusted party could have written. Ordinary remote session
+values do not establish that file-level attack precondition. Keep session DB and
+WAL files in an application-owned directory, with access restricted to the
+application and trusted operators; do not open uploaded or otherwise untrusted
+database/WAL pairs. Applications that must accept such files should not enable
+this backend until their actual SQLite implementation is patched.
+
+The patched binding range is `libsqlite3-sys >=0.39.0`, bundling SQLite 3.54+.
+The latest published SQLx SQLite driver reviewed here, **0.9.0**, still requires
+`libsqlite3-sys >=0.30.1, <0.38.0`; upgrading SQLx to 0.9.0 alone therefore does
+not resolve the advisory. A root-only `[patch.crates-io]` or an updated ignored
+lockfile would also not protect consumers of the published saysion package.
+
+An installation linking a system SQLite must verify the library actually used
+is patched (SQLite 3.54 or newer), including the downstream build configuration
+and any unified `bundled` features. The RustSec advisory distinguishes that
+system-library exposure from the crate's bundled copy. Do not silence the audit
+solely because a system library is installed somewhere on the host.
+
+Track a published compatible SQLx/binding release, or a reviewed upstream change
+that can be distributed to library consumers, before claiming this item fixed.
+Re-run the full audit and SQLite lifecycle tests when changing the dependency.
+
 ## Scoped RSA advisory exception
 
 Reviewed on **2026-10-29**; review again by **2027-01-29** or on any SQLx/RSA
